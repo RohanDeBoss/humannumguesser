@@ -1,4 +1,7 @@
-import math, keyboard, pygame
+import math
+import keyboard
+import pygame
+import threading
 import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
@@ -13,6 +16,9 @@ checknumberbutton = assets + r"images/check.png"
 standardizedtestbutton = assets + r"images/run907.png"
 correctsfx = assets + r"audios/correct.mp3"
 wrongsfx = assets + r"audios/wrong.mp3"
+
+pygame.mixer.init()
+pygame.mixer.music.set_volume(0.25)  # Set volume to 25%
 
 # Global variables for the prediction functions
 global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
@@ -328,65 +334,88 @@ def main():
     return inverted_confidence[max(confidence.values())]
 
 # ----- Tkinter UI Functions -----
-def numinput(event):
-    global win, confidence, confidencelabel, played, timerup, inputted
-    try:
-        if (timerup == False) and (len(inputted) < 500):
-            input_text = entry.get()
-        else:
-            print(inputted)
-            raise ValueError
-        entry.delete(0, "end")
-        result_label.config(text="            ")
-        if (0 <= int(input_text) <= 100) and ((((input_text[0] not in {"0", " "}) == (0 <= int(input_text)) <= 100)) or input_text == "0"):
-            returned = main()
-            inputted.append(input_text)
-            if 0 <= int(inputted[-1]) <= 9: 
-                inputted[-1] = f"0{inputted[-1]}"
-            played.insert(0, returned)
-            if len(played) >= 4: 
-                played.pop(-1)
-            if inputted[-1] == returned: 
-                pygame.mixer.music.load(correctsfx)
-                pygame.mixer.music.play()
-                result_label.config(text=f"    {returned}    ", bg="lawn green")
-                win += 1
-                winorloselabel.config(text="Bot Wins")
-            else:
-                pygame.mixer.music.load(wrongsfx)
-                pygame.mixer.music.play()
-                result_label.config(text=f"    {returned}    ", bg="red2")
-                winorloselabel.config(text="Bot Lost")
-            botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
-            confidence_str = ""
-            result_label.after(200, lambda: result_label.config(bg="skyblue1"))
-            for key, value in confidence.items():
-                confidence_str += f"{key}: {value:.2f}, "
-                if int(key) % 6 == 0:
-                    confidence_str += "\n"
-            confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
-        else:
-            raise ValueError
-    except ValueError:
-        result_label.config(text="poopy number", bg="skyblue1")
+def start_ai_thread(input_text):
+    """Runs the AI prediction (main) on a separate thread and updates UI when done."""
+    def run():
+        returned = main()  # heavy AI computation
+        # Schedule UI update on the main thread
+        root.after(0, update_ui_after_ai, input_text, returned)
+    threading.Thread(target=run, daemon=True).start()
 
-def autonuminput(event):
-    global win, confidence, confidencelabel, inputted, firstinp, secondinp
-    result_label.config(text="calculating")
-    for input_text in testsample:
-        returned = main()
-        inputted.append(input_text)
-        if input_text == returned: 
-            win += 1
-        print(f"actual answer: {input_text} AI winrate {(win/len(inputted)*100):.3f}% Rounds played {len(inputted)}/907")
+def update_ui_after_ai(input_text, returned):
+    global win
+    inputted.append(input_text)
+    if 0 <= int(inputted[-1]) <= 9: 
+        inputted[-1] = f"0{inputted[-1]}"
+    played.insert(0, returned)
+    if len(played) >= 4: 
+        played.pop(-1)
+    if inputted[-1] == returned: 
+        pygame.mixer.music.load(correctsfx)
+        pygame.mixer.music.play()
+        result_label.config(text=f"    {returned}    ", bg="lawn green")
+        win += 1
+        winorloselabel.config(text="Bot Wins")
+    else:
+        pygame.mixer.music.load(wrongsfx)
+        pygame.mixer.music.play()
+        result_label.config(text=f"    {returned}    ", bg="red2")
+        winorloselabel.config(text="Bot Lost")
     botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
     confidence_str = ""
     for key, value in confidence.items():
         confidence_str += f"{key}: {value:.2f}, "
         if int(key) % 6 == 0:
             confidence_str += "\n"
-    result_label.config(text=" Done ")
     confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
+    # Restore default background and refocus entry after 200ms
+    result_label.after(200, lambda: [result_label.config(bg="skyblue1"), entry.focus_set()])
+
+def numinput(event):
+    try:
+        if (not timerup) and (len(inputted) < 500):
+            input_text = entry.get()
+        else:
+            print(inputted)
+            raise ValueError
+        entry.delete(0, "end")
+        result_label.config(text="            ")
+        # Validate the input number
+        if (0 <= int(input_text) <= 100) and ((((input_text[0] not in {"0", " "}) == (0 <= int(input_text)) <= 100)) or input_text == "0"):
+            # Start AI prediction on a separate thread
+            start_ai_thread(input_text)
+        else:
+            raise ValueError
+    except ValueError:
+        result_label.config(text="poopy number", bg="skyblue1")
+    entry.focus_set()  # Refocus entry after input
+
+def start_autotest_thread():
+    def run():
+        global win  # declare win as global so we can update it
+        for input_text in testsample:
+            returned = main()
+            inputted.append(input_text)
+            if input_text == returned: 
+                win += 1  # update the global win counter
+            print(f"actual answer: {input_text} AI winrate {(win/len(inputted)*100):.3f}% Rounds played {len(inputted)}/907")
+        root.after(0, update_ui_after_autotest)
+    threading.Thread(target=run, daemon=True).start()
+
+def update_ui_after_autotest():
+    confidence_str = ""
+    for key, value in confidence.items():
+        confidence_str += f"{key}: {value:.2f}, "
+        if int(key) % 6 == 0:
+            confidence_str += "\n"
+    result_label.config(text=" Done ")
+    botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
+    confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
+    entry.focus_set()  # Refocus entry after autotest
+
+def autonuminput(event):
+    result_label.config(text="calculating")
+    start_autotest_thread()
 
 # ----- UI Initialization -----
 keyboard.on_press_key("enter", numinput)
@@ -396,12 +425,12 @@ timerup = False
 root = tk.Tk()
 root.title("Number Predictor Thing")
 root.configure(bg="pale turquoise")
-root.geometry("1280x620")  # You can keep this for reference
+root.geometry("1300x620")  # You can keep this for reference
 root.attributes("-fullscreen", True)
 
 def toggle_fullscreen(event=None):
     root.attributes("-fullscreen", False)
-
+    entry.focus_set()  # Refocus entry when exiting fullscreen
 root.bind("<Escape>", toggle_fullscreen)
 
 # Create layout frames
@@ -426,6 +455,7 @@ maintitle = tk.Label(top_frame, text="Number Predictor Thing", font=("Helvetica"
 maintitle.pack(pady=10)
 entry = tk.Entry(top_frame, font=("Helvetica", 30))
 entry.pack(pady=10)
+entry.focus_set()  # Set initial focus on entry
 
 # Middle Frame: Buttons
 img_button = tk.PhotoImage(file=checknumberbutton)
@@ -436,12 +466,19 @@ button907 = tk.Button(middle_frame, image=img_907button, borderwidth=0, compound
 button907.grid(row=0, column=1, padx=20, pady=20)
 
 # Bottom Frame: Results and Win Info
-result_label = tk.Label(bottom_frame, text="            ", font=("Helvetica", 50), bg="skyblue1")
-result_label.pack(pady=10)
+custom_frame = tk.Frame(bottom_frame, bg="pale turquoise")
+custom_frame.grid(row=0, column=0, sticky="nsew")
+result_label = tk.Label(custom_frame, text="            ", font=("Helvetica", 50), bg="skyblue1")
+result_label.grid(row=0, column=0, pady=10)
+
 winorloselabel = tk.Label(bottom_frame, text="", font=("Helvetica", 50), bg="pale turquoise")
-winorloselabel.pack(pady=10)
+winorloselabel.grid(row=1, column=0, pady=10)
+
 botplayedlabel = tk.Label(bottom_frame, text="AI Win Rate: NA%\nRounds Played: 0", font=('Helvetica', 30, 'bold'), fg='black', bg="pale turquoise")
-botplayedlabel.pack(pady=10)
+botplayedlabel.grid(row=2, column=0, pady=10)
+
+# Configure column weights for bottom_frame
+bottom_frame.grid_columnconfigure(0, weight=1)
 
 # Right Frame: Confidence Levels
 confidenceinit = {str(i).zfill(2): 0 for i in range(0, 101)}
@@ -456,6 +493,10 @@ confidencelabel.pack(pady=20)
 # Bind events to buttons
 check_button.bind("<Button-1>", numinput)
 button907.bind("<Button-1>", autonuminput)
+
+# Ensure entry retains focus after clicking buttons
+check_button.bind("<ButtonRelease-1>", lambda e: entry.focus_set())
+button907.bind("<ButtonRelease-1>", lambda e: entry.focus_set())
 
 if __name__ == "__main__":
     root.mainloop()
