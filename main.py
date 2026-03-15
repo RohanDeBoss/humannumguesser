@@ -42,6 +42,18 @@ _markov_second_cache = {"chain": None, "train_len": -1}
 # 907 test lock
 _test_running = False
 
+# Precomputed index: value -> list of positions in dataset (built once at startup)
+# Lets pattern matching skip directly to candidate positions instead of scanning all of dataset
+_dataset_pos_index: dict = {}
+for _i, _v in enumerate(dataset):
+    _dataset_pos_index.setdefault(_v, []).append(_i)
+
+# Retrain every round — dataset is small enough (~907) that staleness hurts accuracy
+_RETRAIN_EVERY = 1
+
+# Incrementally maintained index for user history — updated per round, never rebuilt
+_inp_index: dict = {}
+
 # ----- Machine Learning / Prediction Functions -----
 
 def prepare_data(sequence, n_lags=5):
@@ -53,12 +65,15 @@ def prepare_data(sequence, n_lags=5):
     return np.array(X), np.array(y)
 
 def predict_next(sequence, n_lags=5, cache=None):
-    """Predict next value. Pass a cache dict to avoid refitting every call."""
+    """Predict next value. Retrains at most every _RETRAIN_EVERY new data points."""
     if len(sequence) < n_lags + 1:
         raise ValueError("short")
-    if cache is not None and cache["train_len"] == len(sequence):
-        model = cache["model"]
-    else:
+    needs_retrain = (
+        cache is None
+        or cache["model"] is None
+        or (len(sequence) - cache["train_len"]) >= _RETRAIN_EVERY
+    )
+    if needs_retrain:
         X, y = prepare_data(sequence, n_lags)
         if X.size == 0 or y.size == 0:
             raise ValueError("short")
@@ -67,6 +82,8 @@ def predict_next(sequence, n_lags=5, cache=None):
         if cache is not None:
             cache["model"] = model
             cache["train_len"] = len(sequence)
+    else:
+        model = cache["model"]
     last_values = np.array([float(x) for x in sequence[-n_lags:]]).reshape(1, -1)
     return model.predict(last_values)[0]
 
@@ -97,6 +114,18 @@ def othernormaldist(target_number, weight):
         confidence[key] += (10 * normal_pdf(distance, 0, 10)) * weight
     confidence[str(target_number).zfill(2)] += 0.35 * weight
 
+def update_markov_chain(chain, data, k):
+    """Add only the single newest transition to an existing chain — O(1) instead of O(n)."""
+    if len(data) < k + 1:
+        return chain
+    current_state = tuple(data[-(k + 1):-1])
+    next_state = data[-1]
+    if current_state not in chain:
+        chain[current_state] = {}
+    chain[current_state].setdefault(next_state, 0)
+    chain[current_state][next_state] += 1
+    return chain
+
 def build_markov_chain(data, k):
     markov_chain = {}
     for i in range(len(data) - k):
@@ -125,7 +154,11 @@ def predict_next_elementmark(markov_chain, current_state):
     return None
 
 def _get_xgb_model(cache, train, window_size=10):
-    if cache["train_len"] == len(train):
+    needs_retrain = (
+        cache["model"] is None
+        or (len(train) - cache["train_len"]) >= _RETRAIN_EVERY
+    )
+    if not needs_retrain:
         return cache["model"]
     X_train, y_train = [], []
     for i in range(len(train) - window_size):
@@ -173,18 +206,26 @@ def differencepred():
     second_list = list(seconddataset) + list(secondinp)
     full_list   = list(dataset) + list(inputted)
 
+    # Capped sequences for ML — training on the most recent 300 entries keeps
+    # training time constant no matter how many rounds have been played.
+    # Recent patterns are more predictive anyway.
+    _ML_WINDOW = 300
+    first_ml  = first_list[-_ML_WINDOW:]
+    second_ml = second_list[-_ML_WINDOW:]
+    full_ml   = full_list[-_ML_WINDOW:]
+
     nextfirstdiff, nextseconddiff = None, None
 
     # --- RandomForest on digit sequences (cached) ---
     try:
-        nextfirstdiff = round(float(predict_next(first_list, cache=_rf_first_cache)))
+        nextfirstdiff = round(float(predict_next(first_ml, cache=_rf_first_cache)))
     except ValueError:
         pass
     if nextfirstdiff == 10:
         nextseconddiff = 0
     else:
         try:
-            nextseconddiff = round(float(predict_next(second_list, cache=_rf_second_cache)))
+            nextseconddiff = round(float(predict_next(second_ml, cache=_rf_second_cache)))
         except ValueError:
             pass
     if nextfirstdiff is not None and nextseconddiff is not None:
@@ -202,12 +243,19 @@ def differencepred():
 
     nextfirstdiff, nextseconddiff = None, None
 
-    # --- Markov on digit sequences (cached) ---
-    if _markov_first_cache["train_len"] != len(first_list):
+    # --- Markov on digit sequences (incremental update) ---
+    if _markov_first_cache["train_len"] == -1:
         _markov_first_cache["chain"] = build_markov_chain(first_list, 1)
         _markov_first_cache["train_len"] = len(first_list)
-    if _markov_second_cache["train_len"] != len(second_list):
+    elif _markov_first_cache["train_len"] != len(first_list):
+        _markov_first_cache["chain"] = update_markov_chain(_markov_first_cache["chain"], first_list, 1)
+        _markov_first_cache["train_len"] = len(first_list)
+
+    if _markov_second_cache["train_len"] == -1:
         _markov_second_cache["chain"] = build_markov_chain(second_list, 1)
+        _markov_second_cache["train_len"] = len(second_list)
+    elif _markov_second_cache["train_len"] != len(second_list):
+        _markov_second_cache["chain"] = update_markov_chain(_markov_second_cache["chain"], second_list, 1)
         _markov_second_cache["train_len"] = len(second_list)
 
     try:
@@ -231,19 +279,19 @@ def differencepred():
     # --- XGBoost on digit sequences (cached) ---
     window_size = 10
     if len(first_list) > window_size:
-        model = _get_xgb_model(_xgb_first_cache, first_list, window_size)
+        model = _get_xgb_model(_xgb_first_cache, first_ml, window_size)
         if model:
             try:
-                nextfirstdiff = _xgb_predict(model, first_list, window_size)
+                nextfirstdiff = _xgb_predict(model, first_ml, window_size)
             except:
                 pass
     if nextfirstdiff == 100:
         nextseconddiff = 0
     elif len(second_list) > window_size:
-        model = _get_xgb_model(_xgb_second_cache, second_list, window_size)
+        model = _get_xgb_model(_xgb_second_cache, second_ml, window_size)
         if model:
             try:
-                nextseconddiff = _xgb_predict(model, second_list, window_size)
+                nextseconddiff = _xgb_predict(model, second_ml, window_size)
             except:
                 pass
     if nextfirstdiff is not None and nextseconddiff is not None:
@@ -252,16 +300,19 @@ def differencepred():
     # --- RandomForest on full sequence (cached) ---
     nextfirstdiff = None
     try:
-        nextfirstdiff = round(float(predict_next(full_list, cache=_rf_full_cache)))
+        nextfirstdiff = round(float(predict_next(full_ml, cache=_rf_full_cache)))
     except:
         pass
     if nextfirstdiff is not None:
         othernormaldist(int(nextfirstdiff), 8)
 
-    # --- Markov on full sequence (cached) ---
+    # --- Markov on full sequence (incremental update) ---
     nextfirstdiff = None
-    if _markov_full_cache["train_len"] != len(full_list):
+    if _markov_full_cache["train_len"] == -1:
         _markov_full_cache["chain"] = build_markov_chain(full_list, 1)
+        _markov_full_cache["train_len"] = len(full_list)
+    elif _markov_full_cache["train_len"] != len(full_list):
+        _markov_full_cache["chain"] = update_markov_chain(_markov_full_cache["chain"], full_list, 1)
         _markov_full_cache["train_len"] = len(full_list)
     try:
         nextfirstdiff = int(predict_next_elementmark(
@@ -284,39 +335,53 @@ def differencepred():
 
 
 def main():
-    global inputted, temp, tempc, next_element, confidence, firstinp, secondinp
+    global inputted, temp, tempc, next_element, confidence, firstinp, secondinp, _inp_index
     next_element, difference = 0, 0
     confidence = differencepred()
 
-    # --- Dataset pattern matching ---
-    for i in range(len(dataset)):
-        confidence[dataset[i]] += (20609 + len(inputted)) / 7500000
-        try:
-            for j in range(2, min(1002, len(dataset) - i)):
-                temp, tempc = [], []
-                for k in range(j):
-                    temp.insert(0, dataset[i - k])
-                    tempc.insert(0, inputted[-1 - k])
-                if temp == tempc:
-                    confidence[dataset[i + 1]] += (j - 1) * 4.6
+    # --- Dataset pattern matching (index-accelerated) ---
+    # Base confidence: every value in dataset gets a tiny prior
+    base_inc = (20609 + len(inputted)) / 7500000
+    for val, positions in _dataset_pos_index.items():
+        confidence[val] += base_inc * len(positions)
+
+    # Pattern match: only check positions where dataset[i] == inputted[-1]
+    if len(inputted) >= 1:
+        for i in _dataset_pos_index.get(inputted[-1], []):
+            if i + 1 >= len(dataset):
+                continue
+            # Count how far back the match extends
+            match_len = 1
+            max_depth = min(1001, i + 1, len(inputted))
+            for depth in range(1, max_depth):
+                if dataset[i - depth] == inputted[-1 - depth]:
+                    match_len += 1
                 else:
                     break
-        except:
-            pass
+            if match_len >= 2:
+                # Equivalent to summing (j-1)*4.6 for j in range(2, match_len+1)
+                confidence[dataset[i + 1]] += 4.6 * match_len * (match_len - 1) / 2
 
-    # --- User history pattern matching ---
-    for i in range(len(inputted)):
-        retro = i / len(inputted)
-        confidence[inputted[i]] += 0.7 * retro
-        for j in range(2, min(1002, len(inputted) - i)):
-            temp, tempc = [], []
-            for k in range(j):
-                temp.insert(0, inputted[i - k])
-                tempc.insert(0, inputted[-1 - k])
-            if temp == tempc:
-                confidence[inputted[i + 1]] += (j - 1) * 10.9 * retro
-            else:
-                break
+    # --- User history pattern matching (index-accelerated) ---
+    if len(inputted) >= 2:
+        # Incrementally update global index — only add the newest entry
+        _inp_index.setdefault(inputted[-1], []).append(len(inputted) - 1)
+
+        for i in _inp_index.get(inputted[-1], []):
+            if i + 1 >= len(inputted):
+                continue
+            retro = i / len(inputted)
+            confidence[inputted[i]] += 0.7 * retro
+            # Count match depth
+            match_len = 1
+            max_depth = min(1001, i + 1, len(inputted))
+            for depth in range(1, max_depth):
+                if inputted[i - depth] == inputted[-1 - depth]:
+                    match_len += 1
+                else:
+                    break
+            if match_len >= 2:
+                confidence[inputted[i + 1]] += 10.9 * retro * match_len * (match_len - 1) / 2
 
     # --- Arithmetic sequence detection ---
     if len(inputted) >= 2 and (int(inputted[-2]) - int(inputted[-1])) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}:
