@@ -208,8 +208,8 @@ def differencepred():
 
     # Capped sequences for ML — training on the most recent 300 entries keeps
     # training time constant no matter how many rounds have been played.
-    # Recent patterns are more predictive anyway.
-    _ML_WINDOW = 300
+    # 600=8.2, 1000 = 9.3, 3000 = 8.8, 10000 = 8.9
+    _ML_WINDOW = 5000
     first_ml  = first_list[-_ML_WINDOW:]
     second_ml = second_list[-_ML_WINDOW:]
     full_ml   = full_list[-_ML_WINDOW:]
