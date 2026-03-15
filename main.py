@@ -22,53 +22,57 @@ wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 
 # ── Global state ──────────────────────────────────────────────────────────────
 inputted  = []
-firstinp  = deque(maxlen=500)
-secondinp = deque(maxlen=500)
+firstinp  = []
+secondinp = []
 win       = 0
 played    = []
 confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
 
-# ── 907 test ──────────────────────────────────────────────────────────────────
-_test_running = False
-_models_ready = False
+# ── Persistent combined sequences ────────────────────────────────────────────
+# Initialised from base datasets at startup, then extended by one entry per
+# round. This eliminates the biggest per-round cost from doc2: rebuilding
+# list(firstdataset) + list(firstinp) (~20k entries) every single call.
+_first_combined  = list(firstdataset)
+_second_combined = list(seconddataset)
+_full_combined   = list(dataset)
 
-# ── Precomputed dataset index ─────────────────────────────────────────────────
+# ── Dataset pattern matching index ───────────────────────────────────────────
 _dataset_pos_index: dict = {}
 for _i, _v in enumerate(dataset):
     _dataset_pos_index.setdefault(_v, []).append(_i)
 
-# ── User history index (incremental) ─────────────────────────────────────────
+# ── User history index ────────────────────────────────────────────────────────
 _inp_index: dict = {}
 
+# ── 907 test ──────────────────────────────────────────────────────────────────
+_test_running = False
+
 # ── ML config ─────────────────────────────────────────────────────────────────
-_N_LAGS   = 5
-_RF_TREES = 10
+# _ML_WINDOW = 1000 is the proven sweet spot from testing:
+# 500=8.6, 1000=9.1, 2000=8.8, 3000=8.1, 4000=8.6
+_ML_WINDOW = 1000
+_N_LAGS    = 5
+_RF_TREES  = 10
+_XGB_WIN   = 10
 _XGB_TREES = 15
 _XGB_DEPTH = 10
 _XGB_LR    = 0.11
-_XGB_WIN   = 10
 
-# ── Static models — trained ONCE on full 20k, never retrained ─────────────────
-# This is the key insight: the 20k dataset is static and never changes.
-# Training on it every round (as in the original) is wasteful — we get the
-# same predictions every time. Train once at startup, predict cheaply forever.
-_models = {
-    "rf_first":   None,   # RF on firstdataset (digit 1 sequence)
-    "rf_second":  None,   # RF on seconddataset (digit 2 sequence)
-    "rf_full":    None,   # RF on full dataset
-    "xgb_first":  None,   # XGB on firstdataset
-    "xgb_second": None,   # XGB on seconddataset
-}
+# ── Model caches — retrained per round on windowed combined sequence ──────────
+# The window slides over the combined (base + user) sequence, so as the test
+# progresses the RF/XGB increasingly reflects the current person's patterns.
+# This is what doc2 was doing and is the main driver of accuracy.
+_rf_first_cache   = {"model": None, "train_len": -1}
+_rf_second_cache  = {"model": None, "train_len": -1}
+_rf_full_cache    = {"model": None, "train_len": -1}
+_xgb_first_cache  = {"model": None, "train_len": -1}
+_xgb_second_cache = {"model": None, "train_len": -1}
 
-# ── Markov chains — built on full 20k, then incrementally updated ─────────────
-_markov = {
-    "first_o1":  {"chain": None, "train_len": -1},
-    "second_o1": {"chain": None, "train_len": -1},
-    "full_o1":   {"chain": None, "train_len": -1},
-    "first_o2":  {"chain": None, "train_len": -1},
-    "second_o2": {"chain": None, "train_len": -1},
-    "full_o2":   {"chain": None, "train_len": -1},
-}
+# ── Markov caches — order 1 only, incremental O(1) updates ───────────────────
+# Orders 2 and 3 consistently hurt accuracy in testing — too sparse/noisy.
+_markov = {k: {"chain": None, "train_len": -1} for k in [
+    "first_o1", "second_o1", "full_o1",
+]}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -84,43 +88,45 @@ def _prepare_rf(seq, n_lags):
     return np.array(X), np.array(y)
 
 
-def _fit_rf(seq, n_lags=_N_LAGS):
-    X, y = _prepare_rf(seq, n_lags)
-    if X.size == 0:
+def _predict_rf(sequence, cache, n_lags=_N_LAGS):
+    """Retrain on sequence[-_ML_WINDOW:] if data changed, then predict."""
+    seq = sequence[-_ML_WINDOW:]
+    if len(seq) < n_lags + 1:
         raise ValueError("short")
-    m = RandomForestRegressor(n_estimators=_RF_TREES, random_state=42, n_jobs=-1)
-    m.fit(X, y)
-    return m
+    if cache["train_len"] != len(seq):
+        X, y = _prepare_rf(seq, n_lags)
+        if X.size == 0 or y.size == 0:
+            raise ValueError("short")
+        m = RandomForestRegressor(n_estimators=_RF_TREES, random_state=42, n_jobs=-1)
+        m.fit(X, y)
+        cache["model"]     = m
+        cache["train_len"] = len(seq)
+    last = np.array([float(x) for x in seq[-n_lags:]]).reshape(1, -1)
+    return cache["model"].predict(last)[0]
 
 
-def _rf_predict(model, recent, n_lags=_N_LAGS):
-    """Single cheap predict — just a tree traversal, no fitting."""
-    last = np.array([float(x) for x in recent[-n_lags:]]).reshape(1, -1)
-    return model.predict(last)[0]
-
-
-def _fit_xgb(seq, window=_XGB_WIN):
-    s = [float(x) for x in seq]
-    X_train, y_train = [], []
-    for i in range(len(s) - window):
-        g = np.array(s[i:i + window])
-        X_train.append([np.mean(g), np.std(g), np.median(g),
-                        np.max(g), np.min(g), np.max(g) - np.min(g)])
-        y_train.append(s[i + window])
-    if not X_train:
-        return None
-    m = xgb.XGBRegressor(n_estimators=_XGB_TREES, max_depth=_XGB_DEPTH,
-                          learning_rate=_XGB_LR, objective='reg:squarederror')
-    m.fit(np.array(X_train), np.array(y_train))
-    return m
-
-
-def _xgb_predict(model, recent, window=_XGB_WIN):
-    """Single cheap predict — no fitting."""
-    g = np.array([float(x) for x in recent[-window:]])
+def _predict_xgb(sequence, cache, window=_XGB_WIN):
+    """Retrain on sequence[-_ML_WINDOW:] if data changed, then predict."""
+    seq = sequence[-_ML_WINDOW:]
+    if len(seq) <= window:
+        raise ValueError("short")
+    if cache["train_len"] != len(seq):
+        s = [float(x) for x in seq]
+        X_t, y_t = [], []
+        for i in range(len(s) - window):
+            g = np.array(s[i:i + window])
+            X_t.append([np.mean(g), np.std(g), np.median(g),
+                         np.max(g), np.min(g), np.max(g) - np.min(g)])
+            y_t.append(s[i + window])
+        m = xgb.XGBRegressor(n_estimators=_XGB_TREES, max_depth=_XGB_DEPTH,
+                              learning_rate=_XGB_LR, objective='reg:squarederror')
+        m.fit(np.array(X_t), np.array(y_t))
+        cache["model"]     = m
+        cache["train_len"] = len(seq)
+    g = np.array([float(x) for x in seq[-window:]])
     feat = np.array([[np.mean(g), np.std(g), np.median(g),
                       np.max(g), np.min(g), np.max(g) - np.min(g)]])
-    return int(model.predict(feat)[0])
+    return int(cache["model"].predict(feat)[0])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -138,7 +144,6 @@ def _build_markov(data, order):
 
 
 def _update_markov(chain, data, order):
-    """O(1) — appends only the single newest transition."""
     if len(data) < order + 1:
         return chain
     state = tuple(data[-(order + 1):-1])
@@ -165,7 +170,6 @@ def _markov_pred(chain, data, order):
 
 
 def _sync_markov(key, data, order):
-    """Build on first call (after warmup this is already done), O(1) update after."""
     c = _markov[key]
     if c["train_len"] == -1:
         c["chain"]     = _build_markov(data, order)
@@ -205,89 +209,39 @@ def othernormaldist(target, weight):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Warmup — trains everything ONCE on full 20k datasets
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _warmup():
-    """
-    Runs once in a background thread at startup.
-    Trains all RF/XGB models on full 20k static datasets and pre-builds all
-    Markov chains. After this, every prediction is just model.predict() — 
-    microseconds, not milliseconds.
-    """
-    global _models_ready
-
-    fd = list(firstdataset)
-    sd = list(seconddataset)
-    ds = list(dataset)
-
-    # RF models on full sequences
-    try: _models["rf_first"]   = _fit_rf(fd)
-    except: pass
-    try: _models["rf_second"]  = _fit_rf(sd)
-    except: pass
-    try: _models["rf_full"]    = _fit_rf(ds)
-    except: pass
-
-    # XGB models on full sequences
-    try: _models["xgb_first"]  = _fit_xgb(fd)
-    except: pass
-    try: _models["xgb_second"] = _fit_xgb(sd)
-    except: pass
-
-    # Markov chains on full sequences — order 1 and 2
-    _sync_markov("first_o1",  fd, 1)
-    _sync_markov("second_o1", sd, 1)
-    _sync_markov("full_o1",   ds, 1)
-    _sync_markov("first_o2",  fd, 2)
-    _sync_markov("second_o2", sd, 2)
-    _sync_markov("full_o2",   ds, 2)
-
-    _models_ready = True
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# differencepred
-# Per-round cost: 5 model.predict() calls + 6 O(1) Markov updates + lookups
+# differencepred — identical logic to doc2, but using persistent combined lists
 # ═════════════════════════════════════════════════════════════════════════════
 
 def differencepred():
     global confidence, firstinp, secondinp, inputted
+    global _first_combined, _second_combined, _full_combined
 
     confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
     if not inputted:
         return confidence
 
+    # Extend persistent combined lists — O(1) instead of O(20k)
     try:
-        firstinp.append(10 if inputted[-1] == "100" else int(inputted[-1][0]))
-        secondinp.append(int(inputted[-1][1]))
+        fd_val = 10 if inputted[-1] == "100" else int(inputted[-1][0])
+        sd_val = int(inputted[-1][1])
+        firstinp.append(fd_val)
+        secondinp.append(sd_val)
+        _first_combined.append(fd_val)
+        _second_combined.append(sd_val)
+        _full_combined.append(inputted[-1])
     except:
         pass
 
-    # Full sequences for Markov (O(1) incremental update, not rebuilt)
-    # We pass these as references and only the tail is read by _update_markov
-    first_full  = list(firstdataset)  + list(firstinp)
-    second_full = list(seconddataset) + list(secondinp)
-    full_full   = list(dataset)       + list(inputted)
-
-    # Recent context for model predictions (last N entries, fast)
-    # The static models were trained on the full sequences so they know
-    # the general distribution; we just need recent context to predict from.
-    recent_first  = list(firstinp)  if firstinp  else list(firstdataset[-_N_LAGS:])
-    recent_second = list(secondinp) if secondinp else list(seconddataset[-_N_LAGS:])
-    recent_full   = list(inputted)  if inputted  else list(dataset[-_N_LAGS:])
-
-    # ── RF on digit sequences (predict only — no retraining ever) ─────────────
+    # ── RF on digit sequences (retrain on windowed combined) ──────────────────
     fd, sd = None, None
-    if _models["rf_first"] and len(recent_first) >= _N_LAGS:
-        try:
-            fd = round(float(_rf_predict(_models["rf_first"], recent_first)))
-        except: pass
+    try:
+        fd = round(float(_predict_rf(_first_combined, _rf_first_cache)))
+    except: pass
     if fd == 10:
         sd = 0
-    elif fd is not None and _models["rf_second"] and len(recent_second) >= _N_LAGS:
+    elif fd is not None:
         try:
-            sd = round(float(_rf_predict(_models["rf_second"], recent_second)))
+            sd = round(float(_predict_rf(_second_combined, _rf_second_cache)))
         except: pass
     if fd is not None and sd is not None:
         normaldist(fd, sd, 1.0)
@@ -299,58 +253,40 @@ def differencepred():
         normaldist(fd2, sd2, 1.1)
     except: pass
 
-    # ── Order-1 Markov on digit sequences (O(1) update) ──────────────────────
-    _sync_markov("first_o1",  first_full,  1)
-    _sync_markov("second_o1", second_full, 1)
+    # ── Order-1 Markov on digit sequences ─────────────────────────────────────
+    _sync_markov("first_o1",  _first_combined,  1)
+    _sync_markov("second_o1", _second_combined, 1)
     try:
-        fd = int(_markov_pred(_markov["first_o1"]["chain"],  first_full,  1))
-        sd = 0 if fd == 10 else int(_markov_pred(_markov["second_o1"]["chain"], second_full, 1))
+        fd = int(_markov_pred(_markov["first_o1"]["chain"],  _first_combined,  1))
+        sd = 0 if fd == 10 else int(_markov_pred(_markov["second_o1"]["chain"], _second_combined, 1))
         normaldist(fd, sd, 1.7)
     except: pass
 
-    # ── Order-2 Markov on digit sequences (O(1) update) ──────────────────────
-    _sync_markov("first_o2",  first_full,  2)
-    _sync_markov("second_o2", second_full, 2)
-    try:
-        fd = int(_markov_pred(_markov["first_o2"]["chain"],  first_full,  2))
-        sd = 0 if fd == 10 else int(_markov_pred(_markov["second_o2"]["chain"], second_full, 2))
-        normaldist(fd, sd, 2.0)
-    except: pass
-
-    # ── XGB on digit sequences (predict only) ────────────────────────────────
+    # ── XGB on digit sequences (retrain on windowed combined) ─────────────────
     fd, sd = None, None
-    if _models["xgb_first"] and len(recent_first) >= _XGB_WIN:
-        try:
-            fd = _xgb_predict(_models["xgb_first"], recent_first)
-        except: pass
+    try:
+        fd = _predict_xgb(_first_combined, _xgb_first_cache)
+    except: pass
     if fd == 100:
         sd = 0
-    elif fd is not None and _models["xgb_second"] and len(recent_second) >= _XGB_WIN:
+    elif fd is not None:
         try:
-            sd = _xgb_predict(_models["xgb_second"], recent_second)
+            sd = _predict_xgb(_second_combined, _xgb_second_cache)
         except: pass
     if fd is not None and sd is not None:
         normaldist(fd, sd, 1.1)
 
-    # ── RF on full sequence (predict only) ───────────────────────────────────
-    if _models["rf_full"] and len(recent_full) >= _N_LAGS:
-        try:
-            pred = round(float(_rf_predict(_models["rf_full"], recent_full)))
-            othernormaldist(int(pred), 8.0)
-        except: pass
-
-    # ── Order-1 Markov on full sequence ───────────────────────────────────────
-    _sync_markov("full_o1", full_full, 1)
+    # ── RF on full sequence (retrain on windowed combined) ────────────────────
     try:
-        pred = int(_markov_pred(_markov["full_o1"]["chain"], full_full, 1))
-        othernormaldist(pred, 4.6)
+        pred = round(float(_predict_rf(_full_combined, _rf_full_cache)))
+        othernormaldist(int(pred), 8.0)
     except: pass
 
-    # ── Order-2 Markov on full sequence ───────────────────────────────────────
-    _sync_markov("full_o2", full_full, 2)
+    # ── Order-1 Markov on full sequence ───────────────────────────────────────
+    _sync_markov("full_o1", _full_combined, 1)
     try:
-        pred = int(_markov_pred(_markov["full_o2"]["chain"], full_full, 2))
-        othernormaldist(pred, 5.5)
+        pred = int(_markov_pred(_markov["full_o1"]["chain"], _full_combined, 1))
+        othernormaldist(pred, 4.6)
     except: pass
 
     # ── Frequency2 ────────────────────────────────────────────────────────────
@@ -370,7 +306,7 @@ def main():
 
     confidence = differencepred()
 
-    # ── Dataset pattern matching ───────────────────────────────────────────────
+    # ── Dataset pattern matching (index-accelerated) ──────────────────────────
     base_inc = (20609 + len(inputted)) / 7500000
     for val, positions in _dataset_pos_index.items():
         confidence[val] += base_inc * len(positions)
@@ -388,7 +324,7 @@ def main():
             if match_len >= 2:
                 confidence[dataset[i + 1]] += 4.6 * match_len * (match_len - 1) / 2
 
-    # ── User history pattern matching ─────────────────────────────────────────
+    # ── User history pattern matching (index-accelerated) ────────────────────
     if len(inputted) >= 2:
         _inp_index.setdefault(inputted[-1], []).append(len(inputted) - 1)
         for i in _inp_index.get(inputted[-1], []):
@@ -526,10 +462,6 @@ def autonuminput(event=None):
     global _test_running
     if _test_running:
         return
-    if not _models_ready:
-        progress_label.config(
-            text="Still warming up — wait for 'Models ready' message before running the test")
-        return
     _test_running = True
     button907.config(state="disabled")
 
@@ -634,7 +566,7 @@ maintitle = tk.Label(top_frame, text="Number Predictor Thing",
 maintitle.pack(pady=10)
 dataset_label = tk.Label(top_frame,
     text=f"dataset: {len(dataset)} | first: {len(firstdataset)} | "
-         f"second: {len(seconddataset)} | test: {len(testsample)}",
+         f"second: {len(seconddataset)} | test: {len(testsample)}  |  ML window: {_ML_WINDOW}",
     font=("Helvetica", 11), bg="pale turquoise")
 dataset_label.pack()
 entry = tk.Entry(top_frame, font=("Helvetica", 30))
@@ -658,7 +590,7 @@ progress_bar = ttk.Progressbar(stats_frame, orient="horizontal", length=600,
 progress_bar.pack(pady=4)
 
 progress_label = tk.Label(stats_frame,
-    text="Warming up — training models on full dataset in background...",
+    text="Press the 907 button to start the standardised test",
     font=("Helvetica", 13), bg="pale turquoise")
 progress_label.pack()
 
@@ -699,15 +631,5 @@ confidencelabel.pack(pady=20)
 check_button.bind("<Button-1>", numinput)
 button907.bind("<Button-1>", autonuminput)
 
-
-def _on_warmup_done():
-    progress_label.config(
-        text="Models ready — press the 907 button to run the standardised test")
-
-def _warmup_thread():
-    _warmup()
-    root.after(0, _on_warmup_done)
-
 if __name__ == "__main__":
-    threading.Thread(target=_warmup_thread, daemon=True).start()
     root.mainloop()
