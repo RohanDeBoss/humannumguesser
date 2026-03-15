@@ -1,9 +1,7 @@
+# Version 1.0 11.246%, 1400s
 import os
-import time
-import pygame
-import threading
+import math, pygame
 import tkinter as tk
-from tkinter import ttk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
@@ -11,456 +9,312 @@ from data import dataset, firstdataset, seconddataset, testsample, frequency, fr
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── File paths ────────────────────────────────────────────────────────────────
+# File paths — resolved relative to this script so they work from any directory
 _dir = os.path.dirname(os.path.abspath(__file__))
-assets                 = os.path.join(_dir, "assets") + os.sep
+assets = os.path.join(_dir, "assets") + os.sep
 checknumberbutton      = assets + os.path.join("images", "check.png")
 standardizedtestbutton = assets + os.path.join("images", "run907.png")
 correctsfx             = assets + os.path.join("audios", "correct.mp3")
 wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 
-# ── Global state ──────────────────────────────────────────────────────────────
-inputted  = []
-firstinp  = []
-secondinp = []
-win       = 0
-played    = []
-confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
+global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
+inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
 
-# ── Persistent combined sequences — extended O(1) per round ──────────────────
-# Pre-seeded from base datasets so we never rebuild from scratch
-_first_combined  = list(firstdataset)
-_second_combined = list(seconddataset)
-_full_combined   = list(dataset)
-
-# ── Precomputed dataset position index ───────────────────────────────────────
-_dataset_pos_index: dict = {}
-for _i, _v in enumerate(dataset):
-    _dataset_pos_index.setdefault(_v, []).append(_i)
-
-# ── Incremental user history index ───────────────────────────────────────────
-_inp_index: dict = {}
-
-# ── Test state ────────────────────────────────────────────────────────────────
-_test_running = False
-
-# ── ML config ─────────────────────────────────────────────────────────────────
-# Window 1000 is the empirically proven sweet spot (500=8.6, 1000=9.1, 2000=8.8)
-_ML_WINDOW = 1000
-_N_LAGS    = 5
-_RF_TREES  = 10
-_XGB_WIN   = 10
-_XGB_TREES = 15
-_XGB_DEPTH = 10
-_XGB_LR    = 0.11
-
-# ── Model caches ──────────────────────────────────────────────────────────────
-# Cache key is len(seq[-_ML_WINDOW:]).
-# Once the combined list exceeds _ML_WINDOW entries, this freezes — models
-# train once on the last _ML_WINDOW entries of the base dataset and stay there.
-# This is intentional: retraining every round was tested and gave WORSE accuracy
-# (models overfit to noise from single new entries).
-_rf_first_cache   = {"model": None, "train_len": -1}
-_rf_second_cache  = {"model": None, "train_len": -1}
-_rf_full_cache    = {"model": None, "train_len": -1}
-_xgb_first_cache  = {"model": None, "train_len": -1}
-_xgb_second_cache = {"model": None, "train_len": -1}
-
-# ── Markov caches — order 1 only, incremental updates ────────────────────────
-# Order 2/3 were tested and consistently hurt accuracy — too sparse/noisy
-# at 907 test entries vs 20k training entries.
-_markov = {k: {"chain": None, "train_len": -1} for k in [
-    "first_o1", "second_o1", "full_o1"
-]}
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ML helpers
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _prepare_rf(seq, n_lags):
-    s = [float(x) for x in seq]
+def prepare_data(sequence, n_lags=2):
     X, y = [], []
-    for i in range(len(s) - n_lags):
-        X.append(s[i:i + n_lags])
-        y.append(s[i + n_lags])
+    for i in range(len(sequence) - n_lags):
+        X.append(sequence[i:i + n_lags])
+        y.append(sequence[i + n_lags])
     return np.array(X), np.array(y)
 
-
-def _predict_rf(sequence, cache, n_lags=_N_LAGS):
-    seq = sequence[-_ML_WINDOW:]
-    if len(seq) < n_lags + 1:
-        raise ValueError("short")
-    if cache["train_len"] != len(seq):
-        X, y = _prepare_rf(seq, n_lags)
-        if X.size == 0 or y.size == 0:
-            raise ValueError("short")
-        m = RandomForestRegressor(n_estimators=_RF_TREES, random_state=42, n_jobs=-1)
-        m.fit(X, y)
-        cache["model"]     = m
-        cache["train_len"] = len(seq)
-    last = np.array([float(x) for x in seq[-n_lags:]]).reshape(1, -1)
-    return cache["model"].predict(last)[0]
-
-
-def _predict_xgb(sequence, cache, window=_XGB_WIN):
-    seq = sequence[-_ML_WINDOW:]
-    if len(seq) <= window:
-        raise ValueError("short")
-    if cache["train_len"] != len(seq):
-        s = [float(x) for x in seq]
-        X_t, y_t = [], []
-        for i in range(len(s) - window):
-            g = np.array(s[i:i + window])
-            X_t.append([np.mean(g), np.std(g), np.median(g),
-                         np.max(g), np.min(g), np.max(g) - np.min(g)])
-            y_t.append(s[i + window])
-        m = xgb.XGBRegressor(n_estimators=_XGB_TREES, max_depth=_XGB_DEPTH,
-                              learning_rate=_XGB_LR, objective='reg:squarederror')
-        m.fit(np.array(X_t), np.array(y_t))
-        cache["model"]     = m
-        cache["train_len"] = len(seq)
-    g = np.array([float(x) for x in seq[-window:]])
-    feat = np.array([[np.mean(g), np.std(g), np.median(g),
-                      np.max(g), np.min(g), np.max(g) - np.min(g)]])
-    return int(cache["model"].predict(feat)[0])
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Markov helpers
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _build_markov(data, order):
-    chain = {}
-    for i in range(len(data) - order):
-        state = tuple(data[i:i + order])
-        nxt   = data[i + order]
-        chain.setdefault(state, {}).setdefault(nxt, 0)
-        chain[state][nxt] += 1
-    return chain
-
-
-def _update_markov(chain, data, order):
-    if len(data) < order + 1:
-        return chain
-    state = tuple(data[-(order + 1):-1])
-    nxt   = data[-1]
-    chain.setdefault(state, {}).setdefault(nxt, 0)
-    chain[state][nxt] += 1
-    return chain
-
-
-def _markov_pred(chain, data, order):
-    state = tuple(data[-order:])
-    while state not in chain and len(state) > 1:
-        state = state[1:]
-    if state in chain:
-        trans = chain[state]
-        total = sum(trans.values())
-        if total > 0:
-            return max(trans, key=lambda s: trans[s] / total)
-    overall = {}
-    for trans in chain.values():
-        for s, c in trans.items():
-            overall[s] = overall.get(s, 0) + c
-    return max(overall, key=overall.get) if overall else None
-
-
-def _sync_markov(key, data, order):
-    c = _markov[key]
-    if c["train_len"] == -1:
-        c["chain"]     = _build_markov(data, order)
-        c["train_len"] = len(data)
-    elif c["train_len"] != len(data):
-        c["chain"]     = _update_markov(c["chain"], data, order)
-        c["train_len"] = len(data)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Confidence scoring
-# ═════════════════════════════════════════════════════════════════════════════
+def predict_next(sequence, n_lags=2):
+    if len(sequence) < n_lags + 1: raise ValueError("short")
+    X, y = prepare_data(sequence, n_lags)
+    if X.size == 0 or y.size == 0: raise ValueError("short")
+    model = RandomForestRegressor(n_estimators=10, random_state=42)
+    model.fit(X, y)
+    last_values = np.array(sequence[-n_lags:]).reshape(1, -1)
+    next_number = model.predict(last_values)
+    return next_number[0]
 
 def normal_pdf(x, mean, sigma):
-    return (1.0 / (sigma * (2 * 3.141592653589793) ** 0.5)) * \
-           (2.718281828459045 ** (-((x - mean) ** 2) / (2 * sigma ** 2)))
+    factor = 1 / (sigma * (2 * 3.141592653589793)**0.5)
+    exponent = -((x - mean)**2) / (2 * sigma**2)
+    return factor * (2.718281828459045**exponent)
 
-
-def normaldist(fd, sd, weight):
+def normaldist(target_first_digit, target_second_digit, weight):
     global confidence
-    for key in confidence:
-        k_fd = 10 if key == "100" else int(key[0])
-        k_sd = int(key[1])
-        confidence[key] += normal_pdf(abs(k_fd - fd), 0, 2) * weight
-        confidence[key] += (2 - abs(k_sd - sd) / 10) * weight
-        if int(key) == fd * 10 + sd:
-            confidence[key] += weight
-        if k_sd == sd:
+    for key in confidence.keys():
+        if key != "100": first_digit = int(key[0])
+        else: first_digit = 10
+        distance = abs(first_digit - target_first_digit)
+        confidence[key] += (normal_pdf(distance, 0, 2)) * weight
+        second_digit = int(key[1])
+        distance = abs(second_digit - target_second_digit)
+        confidence[key] += (2 - (distance / 10)) * weight
+        if int(key) == (target_first_digit * 10 + target_second_digit):
+            confidence[key] += 1 * weight
+        if int(key[1]) == (target_second_digit):
             confidence[key] += 0.5 * weight
-
-
-def othernormaldist(target, weight):
-    global confidence
-    for key in confidence:
-        confidence[key] += 10 * normal_pdf(abs(int(key) - target), 0, 10) * weight
-    confidence[str(target).zfill(2)] += 0.35 * weight
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# differencepred
-# ═════════════════════════════════════════════════════════════════════════════
-
-def differencepred():
-    global confidence, firstinp, secondinp, inputted
-    global _first_combined, _second_combined, _full_combined
-
-    confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
-    if not inputted:
-        return confidence
-
-    # Extend persistent combined lists — O(1)
-    try:
-        fd_val = 10 if inputted[-1] == "100" else int(inputted[-1][0])
-        sd_val = int(inputted[-1][1])
-        firstinp.append(fd_val)
-        secondinp.append(sd_val)
-        _first_combined.append(fd_val)
-        _second_combined.append(sd_val)
-        _full_combined.append(inputted[-1])
-    except:
-        pass
-
-    # ── RF on digit sequences ─────────────────────────────────────────────────
-    fd, sd = None, None
-    try:
-        fd = round(float(_predict_rf(_first_combined, _rf_first_cache)))
-    except: pass
-    if fd == 10:
-        sd = 0
-    elif fd is not None:
-        try:
-            sd = round(float(_predict_rf(_second_combined, _rf_second_cache)))
-        except: pass
-    if fd is not None and sd is not None:
-        normaldist(fd, sd, 1.0)
-
-    # ── Frequency table (precomputed transition probabilities) ────────────────
-    try:
-        fd2 = frequency[inputted[-1]][0]
-        sd2 = 0 if fd2 == 10 else frequency[inputted[-1]][1]
-        normaldist(fd2, sd2, 1.1)
-    except: pass
-
-    # ── Order-1 Markov on digit sequences ─────────────────────────────────────
-    _sync_markov("first_o1",  _first_combined,  1)
-    _sync_markov("second_o1", _second_combined, 1)
-    try:
-        fd = int(_markov_pred(_markov["first_o1"]["chain"],  _first_combined,  1))
-        sd = 0 if fd == 10 else int(_markov_pred(_markov["second_o1"]["chain"], _second_combined, 1))
-        normaldist(fd, sd, 1.7)
-    except: pass
-
-    # ── XGB on digit sequences ────────────────────────────────────────────────
-    fd, sd = None, None
-    try:
-        fd = _predict_xgb(_first_combined, _xgb_first_cache)
-    except: pass
-    if fd == 100:
-        sd = 0
-    elif fd is not None:
-        try:
-            sd = _predict_xgb(_second_combined, _xgb_second_cache)
-        except: pass
-    if fd is not None and sd is not None:
-        normaldist(fd, sd, 1.1)
-
-    # ── RF on full sequence ───────────────────────────────────────────────────
-    # Weight reduced from 8.0: RF tends to predict modal values (37, 12, etc.)
-    # which would dominate everything else at weight 8.0
-    try:
-        pred = round(float(_predict_rf(_full_combined, _rf_full_cache)))
-        othernormaldist(int(pred), 3.5)
-    except: pass
-
-    # ── Order-1 Markov on full sequence ───────────────────────────────────────
-    # NOTE: frequency2 is the precomputed equivalent of this Markov chain.
-    # We use Markov (which updates with user input) instead of frequency2
-    # so it adapts to the specific person's patterns during the session.
-    _sync_markov("full_o1", _full_combined, 1)
-    try:
-        pred = int(_markov_pred(_markov["full_o1"]["chain"], _full_combined, 1))
-        othernormaldist(pred, 4.6)
-    except: pass
-
-    # ── frequency2 (direct next-number prediction, complements Markov) ────────
-    # frequency2 is from the full dataset aggregation — different computation
-    # method from Markov so provides genuinely independent signal
-    try:
-        othernormaldist(int(frequency2[inputted[-1]]), 4.8)
-    except: pass
-
     return confidence
 
+def othernormaldist(target_number, weight):
+    global confidence
+    for key in confidence.keys():
+        number = int(key)
+        distance = abs(number - target_number)
+        confidence[key] += (10 * normal_pdf(distance, 0, 10)) * weight
+    for key in confidence.keys():
+        number = int(key)
+        if number == target_number:
+            confidence[key] += 0.35 * weight
 
-# ═════════════════════════════════════════════════════════════════════════════
-# main
-# ═════════════════════════════════════════════════════════════════════════════
+def build_markov_chain(data, k):
+    markov_chain = {}
+    for i in range(len(data) - k):
+        current_state = tuple(data[i:i+k])
+        next_state = data[i + k]
+        if current_state not in markov_chain:
+            markov_chain[current_state] = {}
+        if next_state not in markov_chain[current_state]:
+            markov_chain[current_state][next_state] = 0
+        markov_chain[current_state][next_state] += 1
+    return markov_chain
+
+def predict_next_elementmark(markov_chain, current_state):
+    while current_state not in markov_chain and len(current_state) > 1:
+        current_state = current_state[1:]
+    if current_state in markov_chain:
+        transitions = markov_chain[current_state]
+        total_count = sum(transitions.values())
+        if total_count > 0:
+            probabilities = {state: count / total_count for state, count in transitions.items()}
+            next_state = max(probabilities, key=probabilities.get)
+            return next_state
+    overall_transitions = {}
+    for state, transitions in markov_chain.items():
+        for next_state, count in transitions.items():
+            overall_transitions[next_state] = overall_transitions.get(next_state, 0) + count
+    if overall_transitions:
+        total_count = sum(overall_transitions.values())
+        if total_count > 0:
+            probabilities = {state: count / total_count for state, count in overall_transitions.items()}
+            next_state = max(probabilities, key=probabilities.get)
+            return next_state
+    return None
+
+def differencepred():
+    global nextfirstdiff, nextseconddiff, confidence, firstinp, secondinp, inputted
+    confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
+    if len(inputted) == 0: return confidence
+    try:
+        if inputted[-1] == "100": firstinp.append(10)
+        else: firstinp.append(int(inputted[-1][0]))
+        secondinp.append(int(inputted[-1][1]))
+    except: pass
+    nextfirstdiff, nextseconddiff = None, None
+    train = firstdataset + firstinp
+    try: nextfirstdiff = round(float(predict_next(train)))
+    except ValueError: pass
+    if nextfirstdiff == 10: nextseconddiff = 0
+    else:
+        train = seconddataset + secondinp
+        try: nextseconddiff = round(float(predict_next(train)))
+        except ValueError: pass
+    if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1)
+    nextfirstdiff, nextseconddiff = None, None
+    try:
+        nextfirstdiff = frequency[inputted[-1]][0]
+        if nextfirstdiff == 10: nextseconddiff = 0
+        else: nextseconddiff = frequency[inputted[-1]][1]
+        normaldist(nextfirstdiff, nextseconddiff, 1.1)
+    except: pass
+    nextfirstdiff, nextseconddiff = None, None
+    train = firstdataset + firstinp
+    try:
+        markov_chain = build_markov_chain(train, 1)
+        current_state = tuple(train[-1:])
+        nextfirstdiff = int(predict_next_elementmark(markov_chain, current_state))
+    except: pass
+    if nextfirstdiff == 10: nextseconddiff = 0
+    else:
+        try:
+            train = seconddataset + secondinp
+            markov_chain = build_markov_chain(train, 1)
+            current_state = tuple(train[-1:])
+            nextseconddiff = int(predict_next_elementmark(markov_chain, current_state))
+        except: pass
+    if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.7)
+    nextfirstdiff, nextseconddiff = None, None
+    try:
+        X_train = []
+        y_train = []
+        window_size = 10
+        for i in range(len(firstinp) - window_size):
+            group = firstinp[i:i+window_size]
+            mean = np.mean(group)
+            std_dev = np.std(group)
+            median = np.median(group)
+            max_val = np.max(group)
+            min_val = np.min(group)
+            range_val = max_val - min_val
+            X_train.append([mean, std_dev, median, max_val, min_val, range_val])
+            y_train.append(firstinp[i+window_size])
+        X_train = np.array(X_train)
+        y_train = np.array(y_train)
+        model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror')
+        model.fit(X_train, y_train)
+        next_group = firstinp[-window_size:]
+        mean = np.mean(next_group)
+        std_dev = np.std(next_group)
+        median = np.median(next_group)
+        max_val = np.max(next_group)
+        min_val = np.min(next_group)
+        range_val = max_val - min_val
+        nextfirstdiff = int(model.predict(np.array([[mean, std_dev, median, max_val, min_val, range_val]]))[0])
+    except: pass
+    if nextfirstdiff == 100: nextseconddiff = 0
+    else:
+        try:
+            X_train = []
+            y_train = []
+            window_size = 10
+            for i in range(len(secondinp) - window_size):
+                group = secondinp[i:i+window_size]
+                mean = np.mean(group)
+                std_dev = np.std(group)
+                median = np.median(group)
+                max_val = np.max(group)
+                min_val = np.min(group)
+                range_val = max_val - min_val
+                X_train.append([mean, std_dev, median, max_val, min_val, range_val])
+                y_train.append(secondinp[i+window_size])
+            X_train = np.array(X_train)
+            y_train = np.array(y_train)
+            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror')
+            model.fit(X_train, y_train)
+            next_group = secondinp[-window_size:]
+            mean = np.mean(next_group)
+            std_dev = np.std(next_group)
+            median = np.median(next_group)
+            max_val = np.max(next_group)
+            min_val = np.min(next_group)
+            range_val = max_val - min_val
+            nextseconddiff = int(model.predict(np.array([[mean, std_dev, median, max_val, min_val, range_val]]))[0])
+        except: pass
+    if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
+    train = dataset + inputted
+    nextfirstdiff = None
+    try: nextfirstdiff = round(float(predict_next(train)))
+    except: pass
+    if nextseconddiff: othernormaldist(int(nextfirstdiff), 8)
+    nextfirstdiff = None
+    try:
+        markov_chain = build_markov_chain(train, 1)
+        current_state = tuple(train[-1:])
+        nextfirstdiff = int(predict_next_elementmark(markov_chain, current_state))
+    except: pass
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.6)
+    nextfirstdiff = None
+    try: nextfirstdiff = frequency2[inputted[-1]]
+    except: pass
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.8)
+    return confidence
 
 def main():
-    global inputted, played, confidence, _inp_index
-
+    global inputted, retro, temp, tempc, next_element, confidence, firstinp, secondinp
+    next_element, difference = 0, 0
     confidence = differencepred()
-
-    # ── Dataset pattern matching (index-accelerated) ──────────────────────────
-    base_inc = (20609 + len(inputted)) / 7500000
-    for val, positions in _dataset_pos_index.items():
-        confidence[val] += base_inc * len(positions)
-
-    if inputted:
-        for i in _dataset_pos_index.get(inputted[-1], []):
-            if i + 1 >= len(dataset):
-                continue
-            match_len = 1
-            for depth in range(1, min(1001, i + 1, len(inputted))):
-                if dataset[i - depth] == inputted[-1 - depth]:
-                    match_len += 1
-                else:
-                    break
-            if match_len >= 2:
-                confidence[dataset[i + 1]] += 4.6 * match_len * (match_len - 1) / 2
-
-    # ── User history pattern matching (index-accelerated) ────────────────────
-    if len(inputted) >= 2:
-        _inp_index.setdefault(inputted[-1], []).append(len(inputted) - 1)
-        for i in _inp_index.get(inputted[-1], []):
-            if i + 1 >= len(inputted):
-                continue
-            retro     = i / len(inputted)
-            confidence[inputted[i]] += 0.7 * retro
-            match_len = 1
-            for depth in range(1, min(1001, i + 1, len(inputted))):
-                if inputted[i - depth] == inputted[-1 - depth]:
-                    match_len += 1
-                else:
-                    break
-            if match_len >= 2:
-                confidence[inputted[i + 1]] += 10.9 * retro * match_len * (match_len - 1) / 2
-
-    # ── Arithmetic sequence detection ─────────────────────────────────────────
-    if len(inputted) >= 2:
-        diff = int(inputted[-1]) - int(inputted[-2])
-        if diff in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}:
-            ne = int(inputted[-1]) + diff
-            if 0 <= ne <= 100:
-                confidence[str(ne).zfill(2)] += 10
-
-    if len(inputted) >= 3 and inputted[-1] != inputted[-2]:
-        d1 = int(inputted[-1]) - int(inputted[-2])
-        d2 = int(inputted[-2]) - int(inputted[-3])
-        if d1 == d2:
-            ne = int(inputted[-1]) + d1
-            if 0 <= ne <= 100:
-                confidence[str(ne).zfill(2)] += 30
-
-    # ── Geometric sequence detection ──────────────────────────────────────────
+    for i in range(len(dataset)):
+        confidence[dataset[i]] += (20609+len(inputted))/7500000
+        try:
+            for j in range(2, min(1000002, len(dataset) - i)):
+                temp, tempc = [], []
+                for k in range(j):
+                    temp.insert(0, dataset[i - k])
+                    tempc.insert(0, inputted[-1 - k])
+                if temp == tempc: confidence[dataset[i + 1]] += (j - 1) * 4.6
+                else: break
+        except: pass
+    for i in range(len(inputted)):
+        retro = i / (len(inputted))
+        confidence[inputted[i]] += 0.7 * retro
+        for j in range(2, min(1000002, len(inputted) - i)):
+            temp, tempc = [], []
+            for k in range(j):
+                temp.insert(0, inputted[i - k])
+                tempc.insert(0, inputted[-1 - k])
+            if temp == tempc: confidence[inputted[i + 1]] += (j - 1) * 10.9 * retro
+            else: break
+    if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
+        next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
+        if (0 <= next_element <= 9): next_element = f"0{next_element}"
+        if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 10
+    if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
+        difference = int(inputted[-1]) - int(inputted[-2])
+        next_element = int(inputted[-1]) + difference
+        if (0 <= next_element <= 9): next_element = f"0{next_element}"
+        if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     try:
-        if len(inputted) >= 2:
-            ratio = int(inputted[-2]) / int(inputted[-1])
-            if ratio in {2, 0.5}:
-                ne = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
-                if 0 <= ne <= 100:
-                    confidence[str(ne).zfill(2)] += 7
+        if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
+            next_element = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
+            if (0 <= int(next_element) <= 9): next_element = f"0{next_element}"
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 7
     except: pass
-
     try:
-        if len(inputted) >= 3:
-            ratios = [int(inputted[i]) / int(inputted[i - 1])
-                      for i in range(len(inputted) - 3, len(inputted))]
-            if all(r == ratios[0] for r in ratios):
-                ne = int(int(inputted[-1]) * ratios[0])
-                if 0 <= ne <= 100:
-                    confidence[str(ne).zfill(2)] += 30
+        ratios = [int(inputted[i]) / int(inputted[i-1]) for i in range(len(inputted)-3, len(inputted))]
+        if all(ratio == ratios[0] for ratio in ratios):
+            next_element = int((int(inputted[-1])) * ratios[0])
+            if (0 <= next_element <= 9): next_element = f"0{next_element}"
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
-
-    if not inputted:
-        return "37"
-
+    if (len(inputted)) == 0: return "37"
     try:
-        if inputted[-1] == played[1] and inputted[-2] == played[2]:
-            return played[0]
+        if (inputted[-1] == played[1]) and (inputted[-2] == played[2]): return played[0]
     except: pass
-
-    if max(confidence.values()) == 0.0:
-        return inputted[-1]
-
-    return max(confidence, key=confidence.get)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# UI helpers
-# ═════════════════════════════════════════════════════════════════════════════
-
-def start_ai_thread(input_text):
-    def run():
-        returned = main()
-        root.after(0, update_ui_after_ai, input_text, returned)
-    threading.Thread(target=run, daemon=True).start()
-
-
-def update_ui_after_ai(input_text, returned):
-    global win, played, inputted
-    input_text = str(input_text).zfill(2) if 0 <= int(input_text) <= 9 else input_text
-    inputted.append(input_text)
-    played.insert(0, returned)
-    if len(played) >= 4:
-        played.pop(-1)
-    if inputted[-1] == returned:
-        pygame.mixer.music.load(correctsfx)
-        pygame.mixer.music.play()
-        result_label.config(text=f"    {returned}    ", bg="lawn green")
-        win += 1
-        winorloselabel.config(text="Bot Wins")
-    else:
-        pygame.mixer.music.load(wrongsfx)
-        pygame.mixer.music.play()
-        result_label.config(text=f"    {returned}    ", bg="red2")
-        winorloselabel.config(text="Bot Lost")
-    botplayedlabel.config(
-        text=f"AI Win Rate: {(win / len(inputted) * 100):.3f}%\nRounds Played: {len(inputted)}")
-    confidence_str = ""
-    for key, value in confidence.items():
-        confidence_str += f"{key}: {value:.2f}, "
-        if int(key) % 6 == 0:
-            confidence_str += "\n"
-    confidencelabel.config(
-        text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)",
-        fg='black', bg="pale turquoise")
-    result_label.after(200, lambda: result_label.config(bg="skyblue1"))
-    entry.focus_set()
-
+    if max(confidence.items()) == 0.0: return inputted[-1]
+    inverted_confidence = {v: k for k, v in confidence.items()}
+    return inverted_confidence[max(confidence.values())]
 
 def numinput(event=None):
+    global win, confidence, played, timerup, inputted
     try:
-        if len(inputted) >= 500:
-            raise ValueError
-        input_text = entry.get().strip()
+        if (timerup == False) and (len(inputted) < 500): input_text = entry.get()
+        else: raise ValueError
         entry.delete(0, "end")
         result_label.config(text="            ")
-        if not input_text.isdigit():
-            raise ValueError
-        val = int(input_text)
-        if not (0 <= val <= 100):
-            raise ValueError
-        if len(input_text) > 1 and input_text[0] == "0":
-            raise ValueError
-        start_ai_thread(input_text)
-    except ValueError:
-        result_label.config(text="poopy number", bg="skyblue1")
+        if (0 <= int(input_text) <= 100) and ((((input_text[0] not in {"0", " "}) == (0 <= int(input_text))<= 100)) or input_text == "0"):
+            returned = main()
+            inputted.append(input_text)
+            if (0 <= int(inputted[-1]) <= 9): inputted[-1] = f"0{inputted[-1]}"
+            played.insert(0, returned)
+            if len(played) >= 4: played.pop(-1)
+            if inputted[-1] == returned:
+                pygame.mixer.music.load(correctsfx)
+                pygame.mixer.music.play()
+                result_label.config(text=f"    {returned}    ", bg="lawn green")
+                win += 1
+                winorloselabel.config(text="Bot Wins")
+            else:
+                pygame.mixer.music.load(wrongsfx)
+                pygame.mixer.music.play()
+                result_label.config(text=f"    {returned}    ", bg="red2")
+                winorloselabel.config(text="Bot Lost")
+            botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
+            result_label.after(200, lambda: result_label.config(bg="skyblue1"))
+            confidence_str = ""
+            for key, value in confidence.items():
+                confidence_str += f"{key}: {value:.2f}, "
+                if int(key) % 6 == 0:
+                    confidence_str += "\n"
+            confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
+        else: raise ValueError
+    except ValueError: result_label.config(text="poopy number", bg="skyblue1")
     entry.focus_set()
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 907 test
-# ═════════════════════════════════════════════════════════════════════════════
+import time
+import threading
+from tkinter import ttk
 
 def autonuminput(event=None):
     global _test_running
@@ -493,8 +347,7 @@ def autonuminput(event=None):
         history_canvas.delete("all")
         for i, correct in enumerate(state["history"][-50:]):
             x0 = i * 14
-            history_canvas.create_rectangle(
-                x0, 0, x0 + 13, 20,
+            history_canvas.create_rectangle(x0, 0, x0 + 13, 20,
                 fill="#22cc44" if correct else "#dd2222", outline="")
         botplayedlabel.config(text=f"AI Win Rate: {rate:.3f}%\nRounds Played: {idx}")
 
@@ -534,22 +387,25 @@ def autonuminput(event=None):
     threading.Thread(target=run_test, daemon=True).start()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# UI init
-# ═════════════════════════════════════════════════════════════════════════════
-
+_test_running = False
 pygame.mixer.init()
-
+timerup = False
 root = tk.Tk()
-root.title("Number Predictor Thing")
+root.title("Number predictor thing")
 root.configure(bg="pale turquoise")
-root.geometry("1280x620")
 root.attributes("-fullscreen", True)
 
 def toggle_fullscreen(event=None):
     root.attributes("-fullscreen", False)
 root.bind("<Escape>", toggle_fullscreen)
 
+root.grid_columnconfigure(0, weight=3)
+root.grid_columnconfigure(1, weight=2)
+root.grid_rowconfigure(0, weight=1)
+root.grid_rowconfigure(1, weight=2)
+root.grid_rowconfigure(2, weight=1)
+
+# ── Left column ───────────────────────────────────────────────────────────────
 top_frame    = tk.Frame(root, bg="pale turquoise")
 top_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
 middle_frame = tk.Frame(root, bg="pale turquoise")
@@ -559,23 +415,13 @@ bottom_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
 right_frame  = tk.Frame(root, bg="pale turquoise")
 right_frame.grid(row=0, column=1, rowspan=3, sticky="nsew", padx=20, pady=10)
 
-root.grid_columnconfigure(0, weight=3)
-root.grid_columnconfigure(1, weight=2)
-root.grid_rowconfigure(0, weight=1)
-root.grid_rowconfigure(1, weight=2)
-root.grid_rowconfigure(2, weight=1)
-
 maintitle = tk.Label(top_frame, text="Number Predictor Thing",
                      font=("Helvetica", 40, "bold"), bg="white")
 maintitle.pack(pady=10)
-dataset_label = tk.Label(top_frame,
-    text=f"dataset: {len(dataset)} | first: {len(firstdataset)} | "
-         f"second: {len(seconddataset)} | test: {len(testsample)}  |  ML window: {_ML_WINDOW}",
-    font=("Helvetica", 11), bg="pale turquoise")
-dataset_label.pack()
 entry = tk.Entry(top_frame, font=("Helvetica", 30))
 entry.pack(pady=10)
 entry.bind("<Return>", numinput)
+entry.focus_set()
 
 img_button    = tk.PhotoImage(file=checknumberbutton)
 img_907button = tk.PhotoImage(file=standardizedtestbutton)
@@ -586,6 +432,7 @@ button907     = tk.Button(middle_frame, image=img_907button, borderwidth=0,
                            compound=tk.CENTER, bg="pale turquoise")
 button907.grid(row=0, column=1, padx=20, pady=20)
 
+# Live stats panel
 stats_frame = tk.Frame(middle_frame, bg="pale turquoise")
 stats_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
@@ -621,6 +468,7 @@ botplayedlabel = tk.Label(bottom_frame, text="AI Win Rate: NA%\nRounds Played: 0
                            font=('Helvetica', 30, 'bold'), fg='black', bg="pale turquoise")
 botplayedlabel.pack(pady=10)
 
+# ── Right column — confidence levels ─────────────────────────────────────────
 confidenceinit = {str(i).zfill(2): 0 for i in range(0, 101)}
 confidence_str = ""
 for key, value in confidenceinit.items():
@@ -629,7 +477,7 @@ for key, value in confidenceinit.items():
         confidence_str += "\n"
 confidencelabel = tk.Label(right_frame,
     text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)",
-    fg='black', bg="pale turquoise", font=('Helvetica', 15, 'bold'))
+    fg='black', bg="pale turquoise", font=('Helvetica', 11, 'bold'), justify="left")
 confidencelabel.pack(pady=20)
 
 check_button.bind("<Button-1>", numinput)
