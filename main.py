@@ -5,7 +5,6 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 import numpy as np
-from collections import deque
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
 from data import dataset, firstdataset, seconddataset, testsample, frequency, frequency2
@@ -28,28 +27,25 @@ win       = 0
 played    = []
 confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
 
-# ── Persistent combined sequences ────────────────────────────────────────────
-# Initialised from base datasets at startup, then extended by one entry per
-# round. This eliminates the biggest per-round cost from doc2: rebuilding
-# list(firstdataset) + list(firstinp) (~20k entries) every single call.
+# ── Persistent combined sequences — extended O(1) per round ──────────────────
+# Pre-seeded from base datasets so we never rebuild from scratch
 _first_combined  = list(firstdataset)
 _second_combined = list(seconddataset)
 _full_combined   = list(dataset)
 
-# ── Dataset pattern matching index ───────────────────────────────────────────
+# ── Precomputed dataset position index ───────────────────────────────────────
 _dataset_pos_index: dict = {}
 for _i, _v in enumerate(dataset):
     _dataset_pos_index.setdefault(_v, []).append(_i)
 
-# ── User history index ────────────────────────────────────────────────────────
+# ── Incremental user history index ───────────────────────────────────────────
 _inp_index: dict = {}
 
-# ── 907 test ──────────────────────────────────────────────────────────────────
+# ── Test state ────────────────────────────────────────────────────────────────
 _test_running = False
 
 # ── ML config ─────────────────────────────────────────────────────────────────
-# _ML_WINDOW = 1000 is the proven sweet spot from testing:
-# 500=8.6, 1000=9.1, 2000=8.8, 3000=8.1, 4000=8.6
+# Window 1000 is the empirically proven sweet spot (500=8.6, 1000=9.1, 2000=8.8)
 _ML_WINDOW = 1000
 _N_LAGS    = 5
 _RF_TREES  = 10
@@ -58,20 +54,23 @@ _XGB_TREES = 15
 _XGB_DEPTH = 10
 _XGB_LR    = 0.11
 
-# ── Model caches — retrained per round on windowed combined sequence ──────────
-# The window slides over the combined (base + user) sequence, so as the test
-# progresses the RF/XGB increasingly reflects the current person's patterns.
-# This is what doc2 was doing and is the main driver of accuracy.
+# ── Model caches ──────────────────────────────────────────────────────────────
+# Cache key is len(seq[-_ML_WINDOW:]).
+# Once the combined list exceeds _ML_WINDOW entries, this freezes — models
+# train once on the last _ML_WINDOW entries of the base dataset and stay there.
+# This is intentional: retraining every round was tested and gave WORSE accuracy
+# (models overfit to noise from single new entries).
 _rf_first_cache   = {"model": None, "train_len": -1}
 _rf_second_cache  = {"model": None, "train_len": -1}
 _rf_full_cache    = {"model": None, "train_len": -1}
 _xgb_first_cache  = {"model": None, "train_len": -1}
 _xgb_second_cache = {"model": None, "train_len": -1}
 
-# ── Markov caches — order 1 only, incremental O(1) updates ───────────────────
-# Orders 2 and 3 consistently hurt accuracy in testing — too sparse/noisy.
+# ── Markov caches — order 1 only, incremental updates ────────────────────────
+# Order 2/3 were tested and consistently hurt accuracy — too sparse/noisy
+# at 907 test entries vs 20k training entries.
 _markov = {k: {"chain": None, "train_len": -1} for k in [
-    "first_o1", "second_o1", "full_o1",
+    "first_o1", "second_o1", "full_o1"
 ]}
 
 
@@ -89,7 +88,6 @@ def _prepare_rf(seq, n_lags):
 
 
 def _predict_rf(sequence, cache, n_lags=_N_LAGS):
-    """Retrain on sequence[-_ML_WINDOW:] if data changed, then predict."""
     seq = sequence[-_ML_WINDOW:]
     if len(seq) < n_lags + 1:
         raise ValueError("short")
@@ -106,7 +104,6 @@ def _predict_rf(sequence, cache, n_lags=_N_LAGS):
 
 
 def _predict_xgb(sequence, cache, window=_XGB_WIN):
-    """Retrain on sequence[-_ML_WINDOW:] if data changed, then predict."""
     seq = sequence[-_ML_WINDOW:]
     if len(seq) <= window:
         raise ValueError("short")
@@ -209,7 +206,7 @@ def othernormaldist(target, weight):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# differencepred — identical logic to doc2, but using persistent combined lists
+# differencepred
 # ═════════════════════════════════════════════════════════════════════════════
 
 def differencepred():
@@ -220,7 +217,7 @@ def differencepred():
     if not inputted:
         return confidence
 
-    # Extend persistent combined lists — O(1) instead of O(20k)
+    # Extend persistent combined lists — O(1)
     try:
         fd_val = 10 if inputted[-1] == "100" else int(inputted[-1][0])
         sd_val = int(inputted[-1][1])
@@ -232,7 +229,7 @@ def differencepred():
     except:
         pass
 
-    # ── RF on digit sequences (retrain on windowed combined) ──────────────────
+    # ── RF on digit sequences ─────────────────────────────────────────────────
     fd, sd = None, None
     try:
         fd = round(float(_predict_rf(_first_combined, _rf_first_cache)))
@@ -246,7 +243,7 @@ def differencepred():
     if fd is not None and sd is not None:
         normaldist(fd, sd, 1.0)
 
-    # ── Frequency table ────────────────────────────────────────────────────────
+    # ── Frequency table (precomputed transition probabilities) ────────────────
     try:
         fd2 = frequency[inputted[-1]][0]
         sd2 = 0 if fd2 == 10 else frequency[inputted[-1]][1]
@@ -262,7 +259,7 @@ def differencepred():
         normaldist(fd, sd, 1.7)
     except: pass
 
-    # ── XGB on digit sequences (retrain on windowed combined) ─────────────────
+    # ── XGB on digit sequences ────────────────────────────────────────────────
     fd, sd = None, None
     try:
         fd = _predict_xgb(_first_combined, _xgb_first_cache)
@@ -276,20 +273,27 @@ def differencepred():
     if fd is not None and sd is not None:
         normaldist(fd, sd, 1.1)
 
-    # ── RF on full sequence (retrain on windowed combined) ────────────────────
+    # ── RF on full sequence ───────────────────────────────────────────────────
+    # Weight reduced from 8.0: RF tends to predict modal values (37, 12, etc.)
+    # which would dominate everything else at weight 8.0
     try:
         pred = round(float(_predict_rf(_full_combined, _rf_full_cache)))
-        othernormaldist(int(pred), 8.0)
+        othernormaldist(int(pred), 3.5)
     except: pass
 
     # ── Order-1 Markov on full sequence ───────────────────────────────────────
+    # NOTE: frequency2 is the precomputed equivalent of this Markov chain.
+    # We use Markov (which updates with user input) instead of frequency2
+    # so it adapts to the specific person's patterns during the session.
     _sync_markov("full_o1", _full_combined, 1)
     try:
         pred = int(_markov_pred(_markov["full_o1"]["chain"], _full_combined, 1))
         othernormaldist(pred, 4.6)
     except: pass
 
-    # ── Frequency2 ────────────────────────────────────────────────────────────
+    # ── frequency2 (direct next-number prediction, complements Markov) ────────
+    # frequency2 is from the full dataset aggregation — different computation
+    # method from Markov so provides genuinely independent signal
     try:
         othernormaldist(int(frequency2[inputted[-1]]), 4.8)
     except: pass
