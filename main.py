@@ -1,24 +1,20 @@
-# Version 1.0 11.246%, 1400s
-
-#tests:
-"""
-4.4 = 10.805
-4.6 = 11.246
-4.8 = 11.246
-5 = 11.126
-5.2 = 11.025
-
-"""
+# Version 1.1 - Optimized for extreme speed
 
 import os
-import math, pygame
+import pygame
 import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
 from data import dataset, firstdataset, seconddataset, testsample, frequency, frequency2
 import warnings
+import time
+import threading
+from tkinter import ttk
+
 warnings.filterwarnings("ignore")
+
+#800 = 11.125 , 907 = 11.246
 
 # File paths — resolved relative to this script so they work from any directory
 _dir = os.path.dirname(os.path.abspath(__file__))
@@ -32,17 +28,19 @@ global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
 inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
 
 def prepare_data(sequence, n_lags=2):
-    X, y = [], []
-    for i in range(len(sequence) - n_lags):
-        X.append(sequence[i:i + n_lags])
-        y.append(sequence[i + n_lags])
-    return np.array(X), np.array(y)
+    # Optimized from list iteration to instant numpy vector slicing
+    arr = np.array(sequence)
+    X = np.column_stack([arr[i : len(arr) - n_lags + i] for i in range(n_lags)])
+    y = arr[n_lags:]
+    return X, y
 
 def predict_next(sequence, n_lags=2):
     if len(sequence) < n_lags + 1: raise ValueError("short")
     X, y = prepare_data(sequence, n_lags)
     if X.size == 0 or y.size == 0: raise ValueError("short")
-    model = RandomForestRegressor(n_estimators=10, random_state=42)
+    
+    # n_jobs=-1 ensures we utilize all CPU cores, cutting training time drastically
+    model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=-1)
     model.fit(X, y)
     last_values = np.array(sequence[-n_lags:]).reshape(1, -1)
     next_number = model.predict(last_values)
@@ -173,7 +171,9 @@ def differencepred():
             y_train.append(firstinp[i+window_size])
         X_train = np.array(X_train)
         y_train = np.array(y_train)
-        model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror')
+        
+        # Adding n_jobs=-1
+        model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=-1)
         model.fit(X_train, y_train)
         next_group = firstinp[-window_size:]
         mean = np.mean(next_group)
@@ -202,7 +202,9 @@ def differencepred():
                 y_train.append(secondinp[i+window_size])
             X_train = np.array(X_train)
             y_train = np.array(y_train)
-            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror')
+            
+            # Adding n_jobs=-1 
+            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=-1)
             model.fit(X_train, y_train)
             next_group = secondinp[-window_size:]
             mean = np.mean(next_group)
@@ -236,27 +238,43 @@ def main():
     global inputted, retro, temp, tempc, next_element, confidence, firstinp, secondinp
     next_element, difference = 0, 0
     confidence = differencepred()
+    
+    input_len = len(inputted)
+    base_add = (20609 + input_len) / 7500000
+    
+    # Dramatically sped-up mathematical exact translation of historical sequence matching over `dataset`
     for i in range(len(dataset)):
-        confidence[dataset[i]] += (20609+len(inputted))/7500000
-        try:
-            for j in range(2, min(1000002, len(dataset) - i)):
-                temp, tempc = [], []
-                for k in range(j):
-                    temp.insert(0, dataset[i - k])
-                    tempc.insert(0, inputted[-1 - k])
-                if temp == tempc: confidence[dataset[i + 1]] += (j - 1) * 4.6
-                else: break
-        except: pass
-    for i in range(len(inputted)):
-        retro = i / (len(inputted))
-        confidence[inputted[i]] += 0.7 * retro
-        for j in range(2, min(1000002, len(inputted) - i)):
-            temp, tempc = [], []
-            for k in range(j):
-                temp.insert(0, inputted[i - k])
-                tempc.insert(0, inputted[-1 - k])
-            if temp == tempc: confidence[inputted[i + 1]] += (j - 1) * 10.9 * retro
-            else: break
+        confidence[dataset[i]] += base_add
+        if input_len > 0:
+            j_limit = len(dataset) - i
+            if j_limit > 1000002: j_limit = 1000002
+            if j_limit > 2:
+                L = 0
+                while L < j_limit - 1 and L < input_len:
+                    if dataset[i - L] == inputted[-1 - L]:
+                        L += 1
+                    else:
+                        break
+                if L >= 2:
+                    confidence[dataset[i + 1]] += (L * (L - 1) / 2) * 4.6
+
+    # Dramatically sped-up mathematical exact translation of historical sequence matching over `inputted`
+    if input_len > 0:
+        for i in range(input_len):
+            retro = i / input_len
+            confidence[inputted[i]] += 0.7 * retro
+            j_limit = input_len - i
+            if j_limit > 1000002: j_limit = 1000002
+            if j_limit > 2:
+                L = 0
+                while L < j_limit - 1 and L < input_len:
+                    if inputted[i - L] == inputted[-1 - L]:
+                        L += 1
+                    else:
+                        break
+                if L >= 2:
+                    confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 10.9 * retro
+
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
         if (0 <= next_element <= 9): next_element = f"0{next_element}"
@@ -286,6 +304,7 @@ def main():
     if max(confidence.items()) == 0.0: return inputted[-1]
     inverted_confidence = {v: k for k, v in confidence.items()}
     return inverted_confidence[max(confidence.values())]
+
 
 def numinput(event=None):
     global win, confidence, played, timerup, inputted
@@ -323,9 +342,6 @@ def numinput(event=None):
     except ValueError: result_label.config(text="poopy number", bg="skyblue1")
     entry.focus_set()
 
-import time
-import threading
-from tkinter import ttk
 
 def autonuminput(event=None):
     global _test_running
@@ -416,7 +432,7 @@ root.grid_rowconfigure(0, weight=1)
 root.grid_rowconfigure(1, weight=2)
 root.grid_rowconfigure(2, weight=1)
 
-# ── Left column ───────────────────────────────────────────────────────────────
+# Left column
 top_frame    = tk.Frame(root, bg="pale turquoise")
 top_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
 middle_frame = tk.Frame(root, bg="pale turquoise")
@@ -479,7 +495,7 @@ botplayedlabel = tk.Label(bottom_frame, text="AI Win Rate: NA%\nRounds Played: 0
                            font=('Helvetica', 30, 'bold'), fg='black', bg="pale turquoise")
 botplayedlabel.pack(pady=10)
 
-# ── Right column — confidence levels ─────────────────────────────────────────
+# Right column
 confidenceinit = {str(i).zfill(2): 0 for i in range(0, 101)}
 confidence_str = ""
 for key, value in confidenceinit.items():
