@@ -1,4 +1,15 @@
 # Version 1.0 11.246%, 1400s
+
+#tests:
+"""
+4.4 = 10.805
+4.6 = 11.246
+4.8 = 11.246
+5 = 11.126
+5.2 = 11.025
+
+"""
+
 import os
 import math, pygame
 import tkinter as tk
