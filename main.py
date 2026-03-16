@@ -1,7 +1,19 @@
-# Version 2.2 - Precomputed base Markov chains (pure perf, zero accuracy change)
+# Version 2.3 - Final: if input_len >= 2: (count ** 2.5) * 1.5 and input_len >= 3: (count ** 3.5) * 2
+
+# if input_len >= 3:
+# 2.5 = 11.466
+# 3.5 = 11.466
+# 4.5 = 11.466
+# 3 * 2.5 = 11.466
+
+# if input_len >= 2:
+# 2 = 11.466
+# 2.5 = 11.577
+# 3 = 11.577
+# 2.5 * 2 = 11.466
 
 import os
-import math, pygame
+import pygame
 import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
@@ -12,7 +24,6 @@ import time
 import threading
 from tkinter import ttk
 from collections import defaultdict
-import copy
 
 warnings.filterwarnings("ignore")
 
@@ -315,7 +326,7 @@ def main():
                     freq_1[inputted[i+1]] += 1
             for next_val, count in freq_1.items():
                 if count >= 2:
-                    confidence[next_val] += (count ** 2) * 1.5
+                    confidence[next_val] += (count ** 2.5) * 1.5
         if input_len >= 3:
             last_val_1 = inputted[-1]
             last_val_2 = inputted[-2]
@@ -325,7 +336,7 @@ def main():
                     freq_2[inputted[i+2]] += 1
             for next_val, count in freq_2.items():
                 if count >= 2:
-                    confidence[next_val] += (count ** 2.5) * 2.0
+                    confidence[next_val] += (count ** 3.5) * 2
     except: pass
 
     if (len(inputted)) == 0: return "37"
