@@ -1,4 +1,4 @@
-# Version 1.4 - Baseline 1.2 + Interleaved Sequence Detection
+# Version 2.1 - Baseline 1.4 + Exponential Repetition Scaling
 
 import os
 import math, pygame
@@ -287,15 +287,43 @@ def main():
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
 
-    # --- EXPERIMENT 1: Interleaved Sequence Detection ---
-    # Detects alternating patterns (e.g., A, X, B, Y, C -> predicts Y + (Y-X))
     try:
         if len(inputted) >= 5 and (int(inputted[-1]) - int(inputted[-3])) == (int(inputted[-3]) - int(inputted[-5])):
             next_element = int(inputted[-2]) + (int(inputted[-2]) - int(inputted[-4]))
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
-    # ----------------------------------------------------
+
+    # --- EXPERIMENT 1: Exponential Frequency Bonus for User Habits ---
+    try:
+        if input_len >= 2:
+            # 2-Gram Exponential (A -> B)
+            last_1 = inputted[-1]
+            freq_1 = defaultdict(int)
+            for i in range(input_len - 1):
+                if inputted[i] == last_1:
+                    freq_1[inputted[i+1]] += 1
+                    
+            for next_val, count in freq_1.items():
+                if count >= 2:
+                    # Exponential scale: count=2 -> +6, count=3 -> +13.5, count=4 -> +24
+                    confidence[next_val] += (count ** 2) * 1.5
+
+        if input_len >= 3:
+            # 3-Gram Exponential (A -> B -> C)
+            last_val_1 = inputted[-1]
+            last_val_2 = inputted[-2]
+            freq_2 = defaultdict(int)
+            for i in range(input_len - 2):
+                if inputted[i] == last_val_2 and inputted[i+1] == last_val_1:
+                    freq_2[inputted[i+2]] += 1
+                    
+            for next_val, count in freq_2.items():
+                if count >= 2:
+                    # Stronger scale for 3-Grams: count=2 -> +11.3, count=3 -> +31.1
+                    confidence[next_val] += (count ** 2.5) * 2.0
+    except: pass
+    # -----------------------------------------------------------------
 
     if (len(inputted)) == 0: return "37"
     try:
