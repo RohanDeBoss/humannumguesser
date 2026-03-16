@@ -1,4 +1,4 @@
-# Version 1.2 - Extreme Optimization
+# Version 1.4 - Baseline 1.2 + Interleaved Sequence Detection
 
 import os
 import math, pygame
@@ -44,7 +44,6 @@ def predict_next(sequence, n_lags=2):
     X, y = prepare_data(sequence, n_lags)
     if X.size == 0 or y.size == 0: raise ValueError("short")
     
-    # n_jobs=None limits threading overhead which natively crashes throughput on small datasets
     model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
     model.fit(X, y)
     last_values = np.array(sequence[-n_lags:]).reshape(1, -1)
@@ -52,7 +51,6 @@ def predict_next(sequence, n_lags=2):
     return next_number[0]
 
 def get_xgb_features(inp_array, window_size=10):
-    # Pure numpy C-vectorization for XGBoost sliding window variables (Massively faster than py-loops)
     arr = np.array(inp_array, dtype=float)
     N = len(arr)
     if N <= window_size:
@@ -114,7 +112,6 @@ def othernormaldist(target_number, weight):
             confidence[key] += 0.35 * weight
 
 def build_markov_chain(data, k):
-    # Optimized using defaultdict to avoid missing-key checks dynamically
     markov_chain = defaultdict(lambda: defaultdict(int))
     for i in range(len(data) - k):
         current_state = tuple(data[i:i+k])
@@ -148,7 +145,6 @@ def differencepred():
         secondinp.append(int(inputted[-1][1]))
     except: pass
     
-    # Cache lists logic ONCE to prevent multi-allocations that cause GC pauses
     first_train = firstdataset + firstinp
     second_train = seconddataset + secondinp
     main_train = dataset + inputted
@@ -231,12 +227,10 @@ def main():
     input_len = len(inputted)
     base_add = (20609 + input_len) / 7500000
     
-    # 1. Base adds executed simultaneously
     for val, count in dataset_counts.items():
         if val in confidence:
             confidence[val] += count * base_add
 
-    # 2. Skips thousands of empty strings dynamically looking ONLY exactly where matches originate
     if input_len > 0:
         last_val = inputted[-1]
         for i in dataset_indices.get(last_val, []):
@@ -257,8 +251,6 @@ def main():
         for i in range(input_len):
             retro = i / input_len
             confidence[inputted[i]] += 0.7 * retro
-            
-            # Skips loop block mathematically identically if it wouldn't have matched anyway
             if inputted[i] == last_val:
                 j_limit = input_len - i
                 if j_limit > 1000002: j_limit = 1000002
@@ -294,6 +286,17 @@ def main():
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
+
+    # --- EXPERIMENT 1: Interleaved Sequence Detection ---
+    # Detects alternating patterns (e.g., A, X, B, Y, C -> predicts Y + (Y-X))
+    try:
+        if len(inputted) >= 5 and (int(inputted[-1]) - int(inputted[-3])) == (int(inputted[-3]) - int(inputted[-5])):
+            next_element = int(inputted[-2]) + (int(inputted[-2]) - int(inputted[-4]))
+            if (0 <= next_element <= 9): next_element = f"0{next_element}"
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
+    except: pass
+    # ----------------------------------------------------
+
     if (len(inputted)) == 0: return "37"
     try:
         if (inputted[-1] == played[1]) and (inputted[-2] == played[2]): return played[0]
