@@ -1,7 +1,7 @@
-# Version 1.1 - Optimized for extreme speed
+# Version 1.2 - Extreme Optimization
 
 import os
-import pygame
+import math, pygame
 import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
@@ -11,10 +11,9 @@ import warnings
 import time
 import threading
 from tkinter import ttk
+from collections import defaultdict
 
 warnings.filterwarnings("ignore")
-
-#800 = 11.125 , 907 = 11.246
 
 # File paths — resolved relative to this script so they work from any directory
 _dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,8 +26,14 @@ wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
 inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
 
+# Precompute dataset indices and counts to completely remove O(N) loops in sequence matching
+dataset_counts = defaultdict(int)
+dataset_indices = defaultdict(list)
+for i, val in enumerate(dataset):
+    dataset_counts[val] += 1
+    dataset_indices[val].append(i)
+
 def prepare_data(sequence, n_lags=2):
-    # Optimized from list iteration to instant numpy vector slicing
     arr = np.array(sequence)
     X = np.column_stack([arr[i : len(arr) - n_lags + i] for i in range(n_lags)])
     y = arr[n_lags:]
@@ -39,12 +44,42 @@ def predict_next(sequence, n_lags=2):
     X, y = prepare_data(sequence, n_lags)
     if X.size == 0 or y.size == 0: raise ValueError("short")
     
-    # n_jobs=-1 ensures we utilize all CPU cores, cutting training time drastically
-    model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=-1)
+    # n_jobs=None limits threading overhead which natively crashes throughput on small datasets
+    model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
     model.fit(X, y)
     last_values = np.array(sequence[-n_lags:]).reshape(1, -1)
     next_number = model.predict(last_values)
     return next_number[0]
+
+def get_xgb_features(inp_array, window_size=10):
+    # Pure numpy C-vectorization for XGBoost sliding window variables (Massively faster than py-loops)
+    arr = np.array(inp_array, dtype=float)
+    N = len(arr)
+    if N <= window_size:
+        return np.empty((0, 6)), np.empty((0,)), np.empty((0, 6))
+    
+    windows = np.array([arr[i:i+window_size] for i in range(N - window_size)])
+    y_train = arr[window_size:]
+    
+    means = np.mean(windows, axis=1)
+    stds = np.std(windows, axis=1)
+    medians = np.median(windows, axis=1)
+    maxs = np.max(windows, axis=1)
+    mins = np.min(windows, axis=1)
+    ranges = maxs - mins
+    
+    X_train = np.column_stack((means, stds, medians, maxs, mins, ranges))
+    
+    next_group = arr[-window_size:]
+    n_mean = np.mean(next_group)
+    n_std = np.std(next_group)
+    n_median = np.median(next_group)
+    n_max = np.max(next_group)
+    n_min = np.min(next_group)
+    n_range = n_max - n_min
+    X_pred = np.array([[n_mean, n_std, n_median, n_max, n_min, n_range]])
+    
+    return X_train, y_train, X_pred
 
 def normal_pdf(x, mean, sigma):
     factor = 1 / (sigma * (2 * 3.141592653589793)**0.5)
@@ -79,14 +114,11 @@ def othernormaldist(target_number, weight):
             confidence[key] += 0.35 * weight
 
 def build_markov_chain(data, k):
-    markov_chain = {}
+    # Optimized using defaultdict to avoid missing-key checks dynamically
+    markov_chain = defaultdict(lambda: defaultdict(int))
     for i in range(len(data) - k):
         current_state = tuple(data[i:i+k])
         next_state = data[i + k]
-        if current_state not in markov_chain:
-            markov_chain[current_state] = {}
-        if next_state not in markov_chain[current_state]:
-            markov_chain[current_state][next_state] = 0
         markov_chain[current_state][next_state] += 1
     return markov_chain
 
@@ -95,21 +127,15 @@ def predict_next_elementmark(markov_chain, current_state):
         current_state = current_state[1:]
     if current_state in markov_chain:
         transitions = markov_chain[current_state]
-        total_count = sum(transitions.values())
-        if total_count > 0:
-            probabilities = {state: count / total_count for state, count in transitions.items()}
-            next_state = max(probabilities, key=probabilities.get)
-            return next_state
-    overall_transitions = {}
-    for state, transitions in markov_chain.items():
+        if transitions:
+            return max(transitions, key=transitions.get)
+            
+    overall_transitions = defaultdict(int)
+    for transitions in markov_chain.values():
         for next_state, count in transitions.items():
-            overall_transitions[next_state] = overall_transitions.get(next_state, 0) + count
+            overall_transitions[next_state] += count
     if overall_transitions:
-        total_count = sum(overall_transitions.values())
-        if total_count > 0:
-            probabilities = {state: count / total_count for state, count in overall_transitions.items()}
-            next_state = max(probabilities, key=probabilities.get)
-            return next_state
+        return max(overall_transitions, key=overall_transitions.get)
     return None
 
 def differencepred():
@@ -121,15 +147,20 @@ def differencepred():
         else: firstinp.append(int(inputted[-1][0]))
         secondinp.append(int(inputted[-1][1]))
     except: pass
+    
+    # Cache lists logic ONCE to prevent multi-allocations that cause GC pauses
+    first_train = firstdataset + firstinp
+    second_train = seconddataset + secondinp
+    main_train = dataset + inputted
+    
     nextfirstdiff, nextseconddiff = None, None
-    train = firstdataset + firstinp
-    try: nextfirstdiff = round(float(predict_next(train)))
+    try: nextfirstdiff = round(float(predict_next(first_train)))
     except ValueError: pass
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
-        train = seconddataset + secondinp
-        try: nextseconddiff = round(float(predict_next(train)))
+        try: nextseconddiff = round(float(predict_next(second_train)))
         except ValueError: pass
+        
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1)
     nextfirstdiff, nextseconddiff = None, None
     try:
@@ -139,92 +170,50 @@ def differencepred():
         normaldist(nextfirstdiff, nextseconddiff, 1.1)
     except: pass
     nextfirstdiff, nextseconddiff = None, None
-    train = firstdataset + firstinp
+    
     try:
-        markov_chain = build_markov_chain(train, 1)
-        current_state = tuple(train[-1:])
+        markov_chain = build_markov_chain(first_train, 1)
+        current_state = tuple(first_train[-1:])
         nextfirstdiff = int(predict_next_elementmark(markov_chain, current_state))
     except: pass
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try:
-            train = seconddataset + secondinp
-            markov_chain = build_markov_chain(train, 1)
-            current_state = tuple(train[-1:])
+            markov_chain = build_markov_chain(second_train, 1)
+            current_state = tuple(second_train[-1:])
             nextseconddiff = int(predict_next_elementmark(markov_chain, current_state))
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.7)
     nextfirstdiff, nextseconddiff = None, None
+    
     try:
-        X_train = []
-        y_train = []
-        window_size = 10
-        for i in range(len(firstinp) - window_size):
-            group = firstinp[i:i+window_size]
-            mean = np.mean(group)
-            std_dev = np.std(group)
-            median = np.median(group)
-            max_val = np.max(group)
-            min_val = np.min(group)
-            range_val = max_val - min_val
-            X_train.append([mean, std_dev, median, max_val, min_val, range_val])
-            y_train.append(firstinp[i+window_size])
-        X_train = np.array(X_train)
-        y_train = np.array(y_train)
-        
-        # Adding n_jobs=-1
-        model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=-1)
-        model.fit(X_train, y_train)
-        next_group = firstinp[-window_size:]
-        mean = np.mean(next_group)
-        std_dev = np.std(next_group)
-        median = np.median(next_group)
-        max_val = np.max(next_group)
-        min_val = np.min(next_group)
-        range_val = max_val - min_val
-        nextfirstdiff = int(model.predict(np.array([[mean, std_dev, median, max_val, min_val, range_val]]))[0])
+        X_train, y_train, X_pred = get_xgb_features(firstinp, 10)
+        if len(y_train) > 0:
+            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
+            model.fit(X_train, y_train)
+            nextfirstdiff = int(model.predict(X_pred)[0])
     except: pass
+    
     if nextfirstdiff == 100: nextseconddiff = 0
     else:
         try:
-            X_train = []
-            y_train = []
-            window_size = 10
-            for i in range(len(secondinp) - window_size):
-                group = secondinp[i:i+window_size]
-                mean = np.mean(group)
-                std_dev = np.std(group)
-                median = np.median(group)
-                max_val = np.max(group)
-                min_val = np.min(group)
-                range_val = max_val - min_val
-                X_train.append([mean, std_dev, median, max_val, min_val, range_val])
-                y_train.append(secondinp[i+window_size])
-            X_train = np.array(X_train)
-            y_train = np.array(y_train)
-            
-            # Adding n_jobs=-1 
-            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=-1)
-            model.fit(X_train, y_train)
-            next_group = secondinp[-window_size:]
-            mean = np.mean(next_group)
-            std_dev = np.std(next_group)
-            median = np.median(next_group)
-            max_val = np.max(next_group)
-            min_val = np.min(next_group)
-            range_val = max_val - min_val
-            nextseconddiff = int(model.predict(np.array([[mean, std_dev, median, max_val, min_val, range_val]]))[0])
+            X_train, y_train, X_pred = get_xgb_features(secondinp, 10)
+            if len(y_train) > 0:
+                model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
+                model.fit(X_train, y_train)
+                nextseconddiff = int(model.predict(X_pred)[0])
         except: pass
+        
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
-    train = dataset + inputted
+    
     nextfirstdiff = None
-    try: nextfirstdiff = round(float(predict_next(train)))
+    try: nextfirstdiff = round(float(predict_next(main_train)))
     except: pass
     if nextseconddiff: othernormaldist(int(nextfirstdiff), 8)
     nextfirstdiff = None
     try:
-        markov_chain = build_markov_chain(train, 1)
-        current_state = tuple(train[-1:])
+        markov_chain = build_markov_chain(main_train, 1)
+        current_state = tuple(main_train[-1:])
         nextfirstdiff = int(predict_next_elementmark(markov_chain, current_state))
     except: pass
     if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.6)
@@ -242,14 +231,19 @@ def main():
     input_len = len(inputted)
     base_add = (20609 + input_len) / 7500000
     
-    # Dramatically sped-up mathematical exact translation of historical sequence matching over `dataset`
-    for i in range(len(dataset)):
-        confidence[dataset[i]] += base_add
-        if input_len > 0:
+    # 1. Base adds executed simultaneously
+    for val, count in dataset_counts.items():
+        if val in confidence:
+            confidence[val] += count * base_add
+
+    # 2. Skips thousands of empty strings dynamically looking ONLY exactly where matches originate
+    if input_len > 0:
+        last_val = inputted[-1]
+        for i in dataset_indices.get(last_val, []):
             j_limit = len(dataset) - i
             if j_limit > 1000002: j_limit = 1000002
             if j_limit > 2:
-                L = 0
+                L = 1
                 while L < j_limit - 1 and L < input_len:
                     if dataset[i - L] == inputted[-1 - L]:
                         L += 1
@@ -258,22 +252,25 @@ def main():
                 if L >= 2:
                     confidence[dataset[i + 1]] += (L * (L - 1) / 2) * 4.6
 
-    # Dramatically sped-up mathematical exact translation of historical sequence matching over `inputted`
     if input_len > 0:
+        last_val = inputted[-1]
         for i in range(input_len):
             retro = i / input_len
             confidence[inputted[i]] += 0.7 * retro
-            j_limit = input_len - i
-            if j_limit > 1000002: j_limit = 1000002
-            if j_limit > 2:
-                L = 0
-                while L < j_limit - 1 and L < input_len:
-                    if inputted[i - L] == inputted[-1 - L]:
-                        L += 1
-                    else:
-                        break
-                if L >= 2:
-                    confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 10.9 * retro
+            
+            # Skips loop block mathematically identically if it wouldn't have matched anyway
+            if inputted[i] == last_val:
+                j_limit = input_len - i
+                if j_limit > 1000002: j_limit = 1000002
+                if j_limit > 2:
+                    L = 1
+                    while L < j_limit - 1 and L < input_len:
+                        if inputted[i - L] == inputted[-1 - L]:
+                            L += 1
+                        else:
+                            break
+                    if L >= 2:
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 10.9 * retro
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
