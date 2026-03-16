@@ -3,4 +3,4 @@ pygame
 numpy
 scikit-learn
 xgboost
-# hey, one thing I noticed is that if a number is typed with a 0 at the end, its slightly more likely than usual that the next number will also end in a 0, I also noticed that number with 2 of the same digit also make it slightly more likely that the next number will also have 2 of the same digit. Oh and if a number is even like 4 times in a row the next number is also likely to be even, ect. I guess we could add these heuristics, but it would be better for the algorithm to find them itself like what if another person doesnt have that trend you know? how do we do this (it can be subtle btw we are going for small improvements to prediction here)
+# Hey, I noticed something, for 2 digit numbers, the first digit is usually lower than the second one, but im not sure, maybe this is something that the program should also keep track of for the data guessed on the go as well, the idea is that we are building a profile of the guesser as the guess, so that we know what they tend to do. Patterns in their guesses, these are things we cant get from the larger dataset right?
