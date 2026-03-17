@@ -1,5 +1,5 @@
-# Version 2.5 - Use new cleaned dataset test
-
+# Version 2.6 - 11.797% V4 Data Baseline + Alternating & Quadratic Detectors
+# 11.797 again
 
 import os
 import pygame
@@ -7,6 +7,7 @@ import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
+# USING THE OPTIMIZED V4 FILTERED DATA
 from data_filtered_v4 import dataset_filtered as dataset
 from data_filtered_v4 import firstdataset_filtered as firstdataset
 from data_filtered_v4 import seconddataset_filtered as seconddataset
@@ -56,7 +57,7 @@ def prepare_data(sequence, n_lags=2):
     y = arr[n_lags:]
     return X, y
 
-# ── CHANGE 1: Precompute base Random Forests once at startup ──────────────────
+# ── Precompute base Random Forests once at startup ────────────────────────────
 def _build_base_rf(data, n_lags=2):
     X, y = prepare_data(data, n_lags)
     model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
@@ -74,7 +75,6 @@ def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
     last_values = np.array(combined[-n_lags:]).reshape(1, -1)
     pred_base = base_rf.predict(last_values)[0]
     
-    # Train tiny fast model on user data and blend
     if len(user_seq) >= n_lags + 1:
         X, y = prepare_data(user_seq, n_lags)
         if X.size > 0:
@@ -88,7 +88,6 @@ def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
             return w_base * pred_base + w_user * pred_user
             
     return pred_base
-# ─────────────────────────────────────────────────────────────────────────────
 
 def get_xgb_features(inp_array, window_size=10):
     arr = np.array(inp_array, dtype=float)
@@ -140,14 +139,6 @@ def othernormaldist(target_number, weight):
         if number == target_number:
             confidence[key] += 0.35 * weight
 
-def build_markov_chain(data, k):
-    markov_chain = defaultdict(lambda: defaultdict(int))
-    for i in range(len(data) - k):
-        current_state = tuple(data[i:i+k])
-        next_state = data[i + k]
-        markov_chain[current_state][next_state] += 1
-    return markov_chain
-
 def predict_next_elementmark(markov_chain, current_state):
     while current_state not in markov_chain and len(current_state) > 1:
         current_state = current_state[1:]
@@ -187,7 +178,6 @@ def differencepred():
     second_train = seconddataset + secondinp
     main_train   = dataset       + inputted
 
-    # Use fast blended RF predictions
     nextfirstdiff, nextseconddiff = None, None
     try: nextfirstdiff = round(float(predict_next_fast(_base_rf_first, firstdataset, firstinp)))
     except ValueError: pass
@@ -322,6 +312,7 @@ def main():
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
+
     try:
         if len(inputted) >= 5 and (int(inputted[-1]) - int(inputted[-3])) == (int(inputted[-3]) - int(inputted[-5])):
             next_element = int(inputted[-2]) + (int(inputted[-2]) - int(inputted[-4]))
@@ -329,7 +320,7 @@ def main():
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
 
-    # ── CHANGE 2: Alternating Jump Detector (Rhythmic Bouncing) ───────────────────
+    # ── CHANGE 1: Alternating Jump Detector (Rhythmic Bouncing) ───────────────────
     # Detects patterns like +5, -2, +5 -> predicts -2
     try:
         if len(inputted) >= 4:
@@ -341,6 +332,21 @@ def main():
                 next_element = int(inputted[-1]) + next_diff
                 if (0 <= next_element <= 9): next_element = f"0{next_element}"
                 if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 20
+    except: pass
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    # ── CHANGE 2: Quadratic Sequence Detector (Accelerating gaps) ────────────────
+    # Detects accelerating gaps (e.g., gaps of +1, +2, +3)
+    try:
+        if len(inputted) >= 4:
+            d1 = int(inputted[-1]) - int(inputted[-2])
+            d2 = int(inputted[-2]) - int(inputted[-3])
+            d3 = int(inputted[-3]) - int(inputted[-4])
+            if (d1 - d2) == (d2 - d3) and d1 != d2:
+                next_diff = d1 + (d1 - d2)
+                next_element = int(inputted[-1]) + next_diff
+                if (0 <= next_element <= 9): next_element = f"0{next_element}"
+                if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 15
     except: pass
     # ─────────────────────────────────────────────────────────────────────────────
 
