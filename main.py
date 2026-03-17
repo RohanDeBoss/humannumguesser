@@ -1,5 +1,5 @@
-# Version 2.4 - Baseline 2.3 + Fast RF Blending + Alternating Jump Detector
-# 11.577 in 115s!
+# Version 2.5 - Use new cleaned dataset test
+
 
 import os
 import pygame
@@ -7,7 +7,10 @@ import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
-from data import dataset, firstdataset, seconddataset, testsample, frequency, frequency2
+from data_filtered_v4 import dataset_filtered as dataset
+from data_filtered_v4 import firstdataset_filtered as firstdataset
+from data_filtered_v4 import seconddataset_filtered as seconddataset
+from data import testsample, frequency, frequency2 # Keep these from the original
 import warnings
 import time
 import threading
