@@ -1,5 +1,5 @@
-# Version 2.7 - 11.797% Baseline + Fibonacci + Personal 1-Gram History
-# 12.128 OMG in 169s
+# Version 2.8 - Golden 12.128% Baseline + ABA Alternating Detector
+# 12.238 WOW!
 
 import os
 import pygame
@@ -7,7 +7,6 @@ import tkinter as tk
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
-# USING THE OPTIMIZED V4 FILTERED DATA
 from data_filtered_v4 import dataset_filtered as dataset
 from data_filtered_v4 import firstdataset_filtered as firstdataset
 from data_filtered_v4 import seconddataset_filtered as seconddataset
@@ -261,7 +260,6 @@ def main():
         if val in confidence:
             confidence[val] += count * base_add
 
-    # Sequence Matches against the main Dataset
     if input_len > 0:
         last_val = inputted[-1]
         for i in dataset_indices.get(last_val, []):
@@ -275,7 +273,6 @@ def main():
                 if L >= 2:
                     confidence[dataset[i + 1]] += (L * (L - 1) / 2) * 4.6
 
-    # ── CHANGE 1: Restored 1-Gram Fallback for Personal History ─────────────────
     if input_len > 0:
         last_val = inputted[-1]
         for i in range(input_len):
@@ -284,46 +281,34 @@ def main():
             if inputted[i] == last_val:
                 j_limit = input_len - i
                 if j_limit > 1000002: j_limit = 1000002
-                # We want to check lengths of 1 OR more, so j_limit > 1
-                if j_limit > 1:
+                if j_limit > 2:
                     L = 1
                     while L < j_limit - 1 and L < input_len:
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
-                    
                     if L >= 2:
                         confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro 
                     elif L == 1:
-                        # The missing 1-Gram fallback: If they just typed a number they 
-                        # typed before, boost what came after it last time.
-                        confidence[inputted[i + 1]] += 3.5 * retro
-    # ─────────────────────────────────────────────────────────────────────────────
+                        confidence[inputted[i + 1]] += 3.5 * retro 
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
         if (0 <= next_element <= 9): next_element = f"0{next_element}"
         if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 10
+    
     if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
         difference = int(inputted[-1]) - int(inputted[-2])
         next_element = int(inputted[-1]) + difference
         if (0 <= next_element <= 9): next_element = f"0{next_element}"
         if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
-    
-    # ── CHANGE 2: The Missing Fibonacci Detector ─────────────────────────────────
-    try:
-        if len(inputted) >= 3 and (int(inputted[-1]) == int(inputted[-2]) + int(inputted[-3])):
-            next_element = int(inputted[-1]) + int(inputted[-2])
-            if (0 <= next_element <= 9): next_element = f"0{next_element}"
-            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 20
-    except: pass
-    # ─────────────────────────────────────────────────────────────────────────────
-
+        
     try:
         if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
             next_element = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
             if (0 <= int(next_element) <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 7
     except: pass
+    
     try:
         ratios = [int(inputted[i]) / int(inputted[i-1]) for i in range(len(inputted)-3, len(inputted))]
         if all(ratio == ratios[0] for ratio in ratios):
@@ -331,12 +316,31 @@ def main():
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
+    
     try:
         if len(inputted) >= 5 and (int(inputted[-1]) - int(inputted[-3])) == (int(inputted[-3]) - int(inputted[-5])):
             next_element = int(inputted[-2]) + (int(inputted[-2]) - int(inputted[-4]))
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
+
+    # Fibonacci Detector
+    try:
+        if len(inputted) >= 3 and (int(inputted[-1]) == int(inputted[-2]) + int(inputted[-3])):
+            next_element = int(inputted[-1]) + int(inputted[-2])
+            if (0 <= next_element <= 9): next_element = f"0{next_element}"
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 20
+    except: pass
+
+    # ── NEW: ABA Alternating Number Detector ─────────────────────────────────────
+    # Catches human bounce patterns (e.g. 50, 25, 50 -> predicts 25) 
+    # one step earlier than the Alternating Jump Detector.
+    try:
+        if len(inputted) >= 3 and inputted[-1] == inputted[-3] and inputted[-1] != inputted[-2]:
+            next_element = inputted[-2]
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 25
+    except: pass
+    # ─────────────────────────────────────────────────────────────────────────────
 
     # Alternating Jump Detector
     try:
@@ -364,7 +368,6 @@ def main():
                 if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 15
     except: pass
 
-    # Exponential Frequency Bonus for User Habits
     try:
         if input_len >= 2:
             last_1 = inputted[-1]
