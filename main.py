@@ -1,18 +1,5 @@
-# Version 2.3 - Final: if input_len >= 2: (count ** 2.5) * 1.5 and input_len >= 3: (count ** 3.5) * 2
-
-# if input_len >= 3:
-# 2.5 = 11.466
-# 3.5 = 11.466
-# 4.5 = 11.466
-# 3 * 2.5 = 11.466
-
-# if input_len >= 2:
-# 2 = 11.466
-# 2.5 = 11.577
-# 3 = 11.577
-# 2.5 * 2 = 11.466
-
-#Try 5.2 = 11.1, 4.7 = 11.577 (KEEP) 4.6 = 11.577, 4.5 = 11.356, 4.4 = 11.356
+# Version 2.4 - Baseline 2.3 + Fast RF Blending + Alternating Jump Detector
+# 11.577 in 115s!
 
 import os
 import pygame
@@ -47,9 +34,6 @@ for i, val in enumerate(dataset):
     dataset_indices[val].append(i)
 
 # ── Precompute base Markov chains once at startup ─────────────────────────────
-# build_markov_chain on 20k entries was the main per-round bottleneck.
-# These base chains are immutable; each round we copy and add only the tiny
-# user-data tail (~round_number entries), which is O(user_len) not O(20k).
 def _build_base_mc(data, k):
     mc = {}
     for i in range(len(data) - k):
@@ -62,7 +46,6 @@ def _build_base_mc(data, k):
 _base_mc_first  = _build_base_mc(firstdataset,  1)
 _base_mc_second = _build_base_mc(seconddataset, 1)
 _base_mc_full   = _build_base_mc(dataset,       1)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def prepare_data(sequence, n_lags=2):
     arr = np.array(sequence)
@@ -70,14 +53,39 @@ def prepare_data(sequence, n_lags=2):
     y = arr[n_lags:]
     return X, y
 
-def predict_next(sequence, n_lags=2):
-    if len(sequence) < n_lags + 1: raise ValueError("short")
-    X, y = prepare_data(sequence, n_lags)
-    if X.size == 0 or y.size == 0: raise ValueError("short")
+# ── CHANGE 1: Precompute base Random Forests once at startup ──────────────────
+def _build_base_rf(data, n_lags=2):
+    X, y = prepare_data(data, n_lags)
     model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
     model.fit(X, y)
-    last_values = np.array(sequence[-n_lags:]).reshape(1, -1)
-    return model.predict(last_values)[0]
+    return model
+
+_base_rf_first = _build_base_rf(firstdataset)
+_base_rf_second = _build_base_rf(seconddataset)
+_base_rf_full = _build_base_rf(dataset)
+
+def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
+    combined = base_seq + user_seq
+    if len(combined) < n_lags + 1: raise ValueError("short")
+    
+    last_values = np.array(combined[-n_lags:]).reshape(1, -1)
+    pred_base = base_rf.predict(last_values)[0]
+    
+    # Train tiny fast model on user data and blend
+    if len(user_seq) >= n_lags + 1:
+        X, y = prepare_data(user_seq, n_lags)
+        if X.size > 0:
+            user_rf = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
+            user_rf.fit(X, y)
+            pred_user = user_rf.predict(last_values)[0]
+            
+            base_len = len(base_seq)
+            w_base = base_len / (base_len + len(user_seq))
+            w_user = len(user_seq) / (base_len + len(user_seq))
+            return w_base * pred_base + w_user * pred_user
+            
+    return pred_base
+# ─────────────────────────────────────────────────────────────────────────────
 
 def get_xgb_features(inp_array, window_size=10):
     arr = np.array(inp_array, dtype=float)
@@ -153,11 +161,8 @@ def predict_next_elementmark(markov_chain, current_state):
     return None
 
 def _mc_from_base(base_mc, user_data, k):
-    """Copy base chain (plain dicts, fast) then add user_data transitions."""
     mc = {state: dict(nexts) for state, nexts in base_mc.items()}
-    seq = user_data  # user_data is the full user list (small)
-    # add transitions that bridge the base tail into user data
-    # we need the last k items of the base dataset plus all user entries
+    seq = user_data  
     for i in range(len(seq) - k):
         state = tuple(seq[i:i+k])
         nxt   = seq[i + k]
@@ -179,15 +184,19 @@ def differencepred():
     second_train = seconddataset + secondinp
     main_train   = dataset       + inputted
 
+    # Use fast blended RF predictions
     nextfirstdiff, nextseconddiff = None, None
-    try: nextfirstdiff = round(float(predict_next(first_train)))
+    try: nextfirstdiff = round(float(predict_next_fast(_base_rf_first, firstdataset, firstinp)))
     except ValueError: pass
+    
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
-        try: nextseconddiff = round(float(predict_next(second_train)))
+        try: nextseconddiff = round(float(predict_next_fast(_base_rf_second, seconddataset, secondinp)))
         except ValueError: pass
+        
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1)
     nextfirstdiff, nextseconddiff = None, None
+    
     try:
         nextfirstdiff = frequency[inputted[-1]][0]
         if nextfirstdiff == 10: nextseconddiff = 0
@@ -196,7 +205,6 @@ def differencepred():
     except: pass
     nextfirstdiff, nextseconddiff = None, None
 
-    # Markov first/second — copy precomputed base + add user tail only
     try:
         mc = _mc_from_base(_base_mc_first, firstinp, 1)
         current_state = tuple(first_train[-1:])
@@ -231,12 +239,11 @@ def differencepred():
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
 
     nextfirstdiff = None
-    try: nextfirstdiff = round(float(predict_next(main_train)))
+    try: nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset, inputted)))
     except: pass
     if nextseconddiff: othernormaldist(int(nextfirstdiff), 8)
     nextfirstdiff = None
 
-    # Full Markov — copy precomputed base + add user tail only
     try:
         mc = _mc_from_base(_base_mc_full, inputted, 1)
         current_state = tuple(main_train[-1:])
@@ -246,7 +253,7 @@ def differencepred():
     nextfirstdiff = None
     try: nextfirstdiff = frequency2[inputted[-1]]
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7) #Try 5.2 = 11.1, 4.7 = 11.577 (KEEP) 4.6 = 11.577, 4.5 = 11.356, 4.4 = 11.356
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7) 
     return confidence
 
 def main():
@@ -277,7 +284,7 @@ def main():
     if input_len > 0:
         last_val = inputted[-1]
         for i in range(input_len):
-            retro = i / input_len #Decay makes it worse
+            retro = i / input_len 
             confidence[inputted[i]] += 0.7 * retro
             if inputted[i] == last_val:
                 j_limit = input_len - i
@@ -288,7 +295,7 @@ def main():
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
                     if L >= 2:
-                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro #11 = 11.577, 12 = 11.577
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro 
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
@@ -318,6 +325,21 @@ def main():
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
+
+    # ── CHANGE 2: Alternating Jump Detector (Rhythmic Bouncing) ───────────────────
+    # Detects patterns like +5, -2, +5 -> predicts -2
+    try:
+        if len(inputted) >= 4:
+            d1 = int(inputted[-1]) - int(inputted[-2])
+            d2 = int(inputted[-2]) - int(inputted[-3])
+            d3 = int(inputted[-3]) - int(inputted[-4])
+            if (d1 == d3) and (d1 != d2):
+                next_diff = d2
+                next_element = int(inputted[-1]) + next_diff
+                if (0 <= next_element <= 9): next_element = f"0{next_element}"
+                if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 20
+    except: pass
+    # ─────────────────────────────────────────────────────────────────────────────
 
     try:
         if input_len >= 2:
