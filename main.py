@@ -12,6 +12,8 @@
 # 3 = 11.577
 # 2.5 * 2 = 11.466
 
+#Try 5.2 = 11.1, 4.7 = 11.577 (KEEP) 4.6 = 11.577, 4.5 = 11.356, 4.4 = 11.356
+
 import os
 import pygame
 import tkinter as tk
@@ -244,7 +246,7 @@ def differencepred():
     nextfirstdiff = None
     try: nextfirstdiff = frequency2[inputted[-1]]
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.8)
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7) #Try 5.2 = 11.1, 4.7 = 11.577 (KEEP) 4.6 = 11.577, 4.5 = 11.356, 4.4 = 11.356
     return confidence
 
 def main():
@@ -275,7 +277,7 @@ def main():
     if input_len > 0:
         last_val = inputted[-1]
         for i in range(input_len):
-            retro = i / input_len
+            retro = i / input_len #Decay makes it worse
             confidence[inputted[i]] += 0.7 * retro
             if inputted[i] == last_val:
                 j_limit = input_len - i
@@ -286,7 +288,7 @@ def main():
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
                     if L >= 2:
-                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 10.9 * retro
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro #11 = 11.577, 12 = 11.577
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
