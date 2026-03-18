@@ -1,5 +1,5 @@
-# Version 3.0 small cleanups + pattern decay optimised
-# 12.348
+# Version 3.1 - Tweaking ABA Alternating Number Detector to increase score!
+# 12.348 -> 12.459
 
 import os
 import pygame
@@ -345,9 +345,14 @@ def main():
     # Catches human bounce patterns (e.g. 50, 25, 50 -> predicts 25)
     # one step earlier than the Alternating Jump Detector.
     try:
-        if len(inputted) >= 3 and inputted[-1] == inputted[-3] and inputted[-1] != inputted[-2]:
+        if len(inputted) >= 3 and inputted[-1] == inputted[-3] and inputted[-1] != inputted[-2]: #3 = 12.384 #4 = 12.384, 3+50 = 12.459! 4+50 = 12.459! 3+100 = 12.459! 4+100 = 12.459
             next_element = inputted[-2]
-            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 25
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 50
+    except: pass
+    try: #Add abab with +150
+        if len(inputted) >= 5 and inputted[-1] == inputted[-3] == inputted[-5] and inputted[-2] == inputted[-4] and inputted[-1] != inputted[-2]:
+            next_element = inputted[-2]
+            if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 100
     except: pass
     # ─────────────────────────────────────────────────────────────────────────
 
