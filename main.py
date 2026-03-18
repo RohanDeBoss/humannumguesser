@@ -1,5 +1,5 @@
-# Version 3.1 - Tweaking ABA Alternating Number Detector to increase score!
-# 12.348 -> 12.459
+# Version 3.2 small cleanups + pattern decay optimised + Create Dataset mode
+# base:12.459, my_dataset:7.650
 
 import os
 import pygame
@@ -10,7 +10,7 @@ import xgboost as xgb
 from data_filtered_v4 import dataset_filtered as dataset
 from data_filtered_v4 import firstdataset_filtered as firstdataset
 from data_filtered_v4 import seconddataset_filtered as seconddataset
-from data import testsample, frequency, frequency2 # Keep these from the original
+from data import testsample, frequency, frequency2
 import warnings
 import time
 import threading
@@ -29,6 +29,25 @@ wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
 inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
 
+# ── Create Dataset mode globals ───────────────────────────────────────────────
+_create_mode = False
+_custom_entries = []
+_custom_dataset_path = os.path.join(_dir, "my_dataset.py")
+
+# Load existing custom dataset if present
+try:
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("my_dataset", _custom_dataset_path)
+    _mod  = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _custom_entries = list(_mod.my_testsample)
+except:
+    _custom_entries = []
+
+def _save_custom_dataset():
+    with open(_custom_dataset_path, "w") as f:
+        f.write(f"my_testsample = {_custom_entries!r}\n")
+
 # Precompute dataset indices and counts
 dataset_counts = defaultdict(int)
 dataset_indices = defaultdict(list)
@@ -36,7 +55,6 @@ for i, val in enumerate(dataset):
     dataset_counts[val] += 1
     dataset_indices[val].append(i)
 
-# Precompute int version of dataset for RF full model
 dataset_int = [int(x) for x in dataset]
 
 # ── Precompute base Markov chains once at startup ─────────────────────────────
@@ -59,36 +77,31 @@ def prepare_data(sequence, n_lags=2):
     y = arr[n_lags:]
     return X, y
 
-# ── Precompute base Random Forests once at startup ────────────────────────────
 def _build_base_rf(data, n_lags=2):
     X, y = prepare_data(data, n_lags)
     model = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
     model.fit(X, y)
     return model
 
-_base_rf_first = _build_base_rf(firstdataset)
+_base_rf_first  = _build_base_rf(firstdataset)
 _base_rf_second = _build_base_rf(seconddataset)
-_base_rf_full = _build_base_rf(dataset_int)
+_base_rf_full   = _build_base_rf(dataset_int)
 
 def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
     combined = base_seq + user_seq
     if len(combined) < n_lags + 1: raise ValueError("short")
-    
     last_values = np.array(combined[-n_lags:]).reshape(1, -1)
     pred_base = base_rf.predict(last_values)[0]
-    
     if len(user_seq) >= n_lags + 1:
         X, y = prepare_data(user_seq, n_lags)
         if X.size > 0:
             user_rf = RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=None)
             user_rf.fit(X, y)
             pred_user = user_rf.predict(last_values)[0]
-            
             base_len = len(base_seq)
             w_base = base_len / (base_len + len(user_seq))
             w_user = len(user_seq) / (base_len + len(user_seq))
             return w_base * pred_base + w_user * pred_user
-            
     return pred_base
 
 def get_xgb_features(inp_array, window_size=10):
@@ -158,7 +171,7 @@ def predict_next_elementmark(markov_chain, current_state):
 
 def _mc_from_base(base_mc, user_data, k):
     mc = {state: dict(nexts) for state, nexts in base_mc.items()}
-    seq = user_data  
+    seq = user_data
     for i in range(len(seq) - k):
         state = tuple(seq[i:i+k])
         nxt   = seq[i + k]
@@ -183,15 +196,13 @@ def differencepred():
     nextfirstdiff, nextseconddiff = None, None
     try: nextfirstdiff = round(float(predict_next_fast(_base_rf_first, firstdataset, firstinp)))
     except ValueError: pass
-    
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try: nextseconddiff = round(float(predict_next_fast(_base_rf_second, seconddataset, secondinp)))
         except ValueError: pass
-        
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1)
     nextfirstdiff, nextseconddiff = None, None
-    
+
     try:
         nextfirstdiff = frequency[inputted[-1]][0]
         if nextfirstdiff == 10: nextseconddiff = 0
@@ -233,9 +244,6 @@ def differencepred():
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
 
-    # FIX v2.9: cast inputted to ints so _base_rf_full (trained on dataset_int) receives
-    # numeric features instead of strings, which previously caused a silent except-swallowed
-    # failure meaning this entire branch contributed nothing every round.
     nextfirstdiff = None
     try:
         inputted_int = [int(x) for x in inputted]
@@ -253,7 +261,7 @@ def differencepred():
     nextfirstdiff = None
     try: nextfirstdiff = frequency2[inputted[-1]]
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7) 
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7)
     return confidence
 
 def main():
@@ -262,7 +270,7 @@ def main():
     confidence = differencepred()
 
     input_len = len(inputted)
-    base_add  = (len(dataset) + input_len) / 7500000 # best
+    base_add  = (len(dataset) + input_len) / 7500000
 
     for val, count in dataset_counts.items():
         if val in confidence:
@@ -283,9 +291,9 @@ def main():
 
     if input_len > 0:
         last_val = inputted[-1]
-        for i in range(input_len): #New decay formula
-            age_decay = 0.5 ** ((input_len - 1 - i) / 1000) #500 = 12.128, 700 = 12.128, 1000 = 12.348, 2000 = 12.348, 4000 = 12.348, 10000 = 12.238
-            retro = (i / input_len) * age_decay 
+        for i in range(input_len):
+            age_decay = 0.5 ** ((input_len - 1 - i) / 1000)
+            retro = (i / input_len) * age_decay
             confidence[inputted[i]] += 0.7 * retro
             if inputted[i] == last_val:
                 j_limit = input_len - i
@@ -296,28 +304,28 @@ def main():
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
                     if L >= 2:
-                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro 
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro
                     elif L == 1:
-                        confidence[inputted[i + 1]] += 3.5 * retro 
+                        confidence[inputted[i + 1]] += 3.5 * retro
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1, 2, 3, 5, 10, 20, -1, -2, -3, -5, -10, -20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
         if (0 <= next_element <= 9): next_element = f"0{next_element}"
         if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 10
-    
+
     if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
         difference = int(inputted[-1]) - int(inputted[-2])
         next_element = int(inputted[-1]) + difference
         if (0 <= next_element <= 9): next_element = f"0{next_element}"
         if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
-        
+
     try:
         if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
             next_element = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
             if (0 <= int(next_element) <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 7
     except: pass
-    
+
     try:
         ratios = [int(inputted[i]) / int(inputted[i-1]) for i in range(len(inputted)-3, len(inputted))]
         if all(ratio == ratios[0] for ratio in ratios):
@@ -325,7 +333,7 @@ def main():
             if (0 <= next_element <= 9): next_element = f"0{next_element}"
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 30
     except: pass
-    
+
     try:
         if len(inputted) >= 5 and (int(inputted[-1]) - int(inputted[-3])) == (int(inputted[-3]) - int(inputted[-5])):
             next_element = int(inputted[-2]) + (int(inputted[-2]) - int(inputted[-4]))
@@ -403,50 +411,79 @@ def main():
                 if count >= 2:
                     confidence[next_val] += (count ** 3.5) * 2
     except: pass
-    
-    if (len(inputted)) == 0: return "37"
 
+    if (len(inputted)) == 0: return "37"
     if max(confidence.items()) == 0.0: return inputted[-1]
     inverted_confidence = {v: k for k, v in confidence.items()}
-
     return inverted_confidence[max(confidence.values())]
 
 
 def numinput(event=None):
-    global win, confidence, played, timerup, inputted
+    global win, confidence, played, timerup, inputted, _create_mode, _custom_entries
     try:
-        if (timerup == False) and (len(inputted) < 500): input_text = entry.get()
+        if (timerup == False) and (len(inputted) < 500 or _create_mode): input_text = entry.get()
         else: raise ValueError
         entry.delete(0, "end")
         result_label.config(text="            ")
         if (0 <= int(input_text) <= 100) and ((((input_text[0] not in {"0", " "}) == (0 <= int(input_text))<= 100)) or input_text == "0"):
-            returned = main()
-            inputted.append(input_text)
-            if (0 <= int(inputted[-1]) <= 9): inputted[-1] = f"0{inputted[-1]}"
-            played.insert(0, returned)
-            if len(played) >= 4: played.pop(-1)
-            if inputted[-1] == returned:
-                pygame.mixer.music.load(correctsfx)
-                pygame.mixer.music.play()
-                result_label.config(text=f"    {returned}    ", bg="lawn green")
-                win += 1
-                winorloselabel.config(text="Bot Wins")
+            # Normalise to zero-padded string
+            num_str = input_text if int(input_text) >= 10 else f"0{int(input_text)}"
+
+            if _create_mode:
+                # ── Create Dataset mode: just record, no prediction ───────────
+                _custom_entries.append(num_str)
+                if len(_custom_entries) % 10 == 0:
+                    _save_custom_dataset()
+                create_count_label.config(text=f"Entries: {len(_custom_entries)}  (saved every 10)")
+                result_label.config(text=f"  +{num_str}  ", bg="pale turquoise")
+                result_label.after(300, lambda: result_label.config(bg="pale turquoise", text="            "))
             else:
-                pygame.mixer.music.load(wrongsfx)
-                pygame.mixer.music.play()
-                result_label.config(text=f"    {returned}    ", bg="red2")
-                winorloselabel.config(text="Bot Lost")
-            botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
-            result_label.after(200, lambda: result_label.config(bg="skyblue1"))
-            confidence_str = ""
-            for key, value in confidence.items():
-                confidence_str += f"{key}: {value:.2f}, "
-                if int(key) % 6 == 0:
-                    confidence_str += "\n"
-            confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
+                # ── Normal predict mode ───────────────────────────────────────
+                returned = main()
+                inputted.append(input_text)
+                if (0 <= int(inputted[-1]) <= 9): inputted[-1] = f"0{inputted[-1]}"
+                played.insert(0, returned)
+                if len(played) >= 4: played.pop(-1)
+                if inputted[-1] == returned:
+                    pygame.mixer.music.load(correctsfx)
+                    pygame.mixer.music.play()
+                    result_label.config(text=f"    {returned}    ", bg="lawn green")
+                    win += 1
+                    winorloselabel.config(text="Bot Wins")
+                else:
+                    pygame.mixer.music.load(wrongsfx)
+                    pygame.mixer.music.play()
+                    result_label.config(text=f"    {returned}    ", bg="red2")
+                    winorloselabel.config(text="Bot Lost")
+                botplayedlabel.config(text=f"AI Win Rate: {(win/len(inputted)*100):.3f}%\nRounds Played: {len(inputted)}")
+                result_label.after(200, lambda: result_label.config(bg="skyblue1"))
+                confidence_str = ""
+                for key, value in confidence.items():
+                    confidence_str += f"{key}: {value:.2f}, "
+                    if int(key) % 6 == 0:
+                        confidence_str += "\n"
+                confidencelabel.config(text=f"Confidence levels for prior number:\n{confidence_str}\n(don't use these to cheat weirdo)", fg='black', bg="pale turquoise")
         else: raise ValueError
     except ValueError: result_label.config(text="poopy number", bg="skyblue1")
     entry.focus_set()
+
+
+def toggle_create_mode():
+    global _create_mode, _custom_entries
+    _create_mode = not _create_mode
+    if _create_mode:
+        create_btn.config(bg="lawn green", relief="sunken")
+        create_count_label.config(text=f"Entries: {len(_custom_entries)}  (saved every 10)")
+        result_label.config(text="Create Mode ON", bg="pale turquoise")
+        winorloselabel.config(text="Entering dataset...")
+    else:
+        # Save any remaining entries on exit
+        if _custom_entries:
+            _save_custom_dataset()
+        create_btn.config(bg="pale turquoise", relief="raised")
+        create_count_label.config(text=f"Custom dataset: {len(_custom_entries)} entries saved")
+        result_label.config(text="            ", bg="skyblue1")
+        winorloselabel.config(text="")
 
 
 def autonuminput(event=None):
@@ -454,20 +491,36 @@ def autonuminput(event=None):
     if _test_running: return
     _test_running = True
     button907.config(state="disabled")
+    _run_auto_test(testsample, "907")
+
+def run_custom_test(event=None):
+    global _test_running, _custom_entries
+    if _test_running: return
+    if len(_custom_entries) < 2:
+        progress_label.config(text="Custom dataset is empty — add entries first!")
+        return
+    _test_running = True
+    custom_test_btn.config(state="disabled")
+    _run_auto_test(_custom_entries, "custom")
+
+def _run_auto_test(sample, label):
+    global win, inputted, _test_running
     test_state = {
         "win": 0, "streak": 0, "best_streak": 0,
         "lose_streak": 0, "worst_streak": 0,
         "history": [], "start_time": time.time(),
         "last_actual": "—", "last_guess": "—", "last_correct": None,
     }
+    progress_bar["maximum"] = len(sample)
+
     def update_live_ui(state, idx):
-        total   = len(testsample)
+        total   = len(sample)
         rate    = state["win"] / idx * 100 if idx > 0 else 0
         elapsed = time.time() - state["start_time"]
         rps     = idx / elapsed if elapsed > 0 else 0
         eta     = (total - idx) / rps if rps > 0 else 0
         progress_bar["value"] = idx
-        progress_label.config(text=f"Round {idx}/{total}  —  {rate:.2f}% accuracy  —  {rps:.1f} rounds/sec  —  ETA {eta:.0f}s")
+        progress_label.config(text=f"[{label}] Round {idx}/{total}  —  {rate:.2f}% accuracy  —  {rps:.1f} rounds/sec  —  ETA {eta:.0f}s")
         streak_label.config(text=f"Current streak: {state['streak']}  |  Best win: {state['best_streak']}  |  Worst loss: {state['worst_streak']}")
         last_label.config(text=f"Actual: {state['last_actual']}   AI guessed: {state['last_guess']}", bg="lawn green" if state["last_correct"] else "red2")
         history_canvas.delete("all")
@@ -475,9 +528,10 @@ def autonuminput(event=None):
             x0 = i * 14
             history_canvas.create_rectangle(x0, 0, x0+13, 20, fill="#22cc44" if correct else "#dd2222", outline="")
         botplayedlabel.config(text=f"AI Win Rate: {rate:.3f}%\nRounds Played: {idx}")
+
     def run_test():
         global win, inputted, _test_running
-        for idx, input_text in enumerate(testsample, start=1):
+        for idx, input_text in enumerate(sample, start=1):
             returned = main()
             inputted.append(input_text)
             correct = input_text == returned
@@ -496,15 +550,18 @@ def autonuminput(event=None):
             test_state["last_guess"]   = returned
             test_state["last_correct"] = correct
             root.after(0, update_live_ui, dict(test_state), idx)
+
         def finish():
             global _test_running
             elapsed = time.time() - test_state["start_time"]
-            rate    = test_state["win"] / len(testsample) * 100
-            progress_label.config(text=f"Done! {len(testsample)} rounds in {elapsed:.1f}s  —  Final accuracy: {rate:.3f}%")
+            rate    = test_state["win"] / len(sample) * 100
+            progress_label.config(text=f"[{label}] Done! {len(sample)} rounds in {elapsed:.1f}s  —  Final accuracy: {rate:.3f}%")
             last_label.config(text="Test complete", bg="pale turquoise")
             button907.config(state="normal")
+            custom_test_btn.config(state="normal")
             _test_running = False
         root.after(0, finish)
+
     threading.Thread(target=run_test, daemon=True).start()
 
 
@@ -544,13 +601,39 @@ entry.focus_set()
 
 img_button    = tk.PhotoImage(file=checknumberbutton)
 img_907button = tk.PhotoImage(file=standardizedtestbutton)
-check_button  = tk.Button(middle_frame, image=img_button,    borderwidth=0, compound=tk.CENTER, bg="pale turquoise")
-check_button.grid(row=0, column=0, padx=20, pady=20)
-button907     = tk.Button(middle_frame, image=img_907button, borderwidth=0, compound=tk.CENTER, bg="pale turquoise")
-button907.grid(row=0, column=1, padx=20, pady=20)
 
+# ── Button row 1: check + 907 test ───────────────────────────────────────────
+btn_row1 = tk.Frame(middle_frame, bg="pale turquoise")
+btn_row1.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 2))
+
+check_button = tk.Button(btn_row1, image=img_button, borderwidth=0, compound=tk.CENTER, bg="pale turquoise")
+check_button.pack(side="left", padx=10)
+button907 = tk.Button(btn_row1, image=img_907button, borderwidth=0, compound=tk.CENTER, bg="pale turquoise")
+button907.pack(side="left", padx=10)
+
+# ── Button row 2: create dataset + test custom ────────────────────────────────
+btn_row2 = tk.Frame(middle_frame, bg="pale turquoise")
+btn_row2.grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 6))
+
+create_btn = tk.Button(btn_row2, text="Create Dataset", font=("Helvetica", 16, "bold"),
+                       bg="pale turquoise", relief="raised", padx=16, pady=10,
+                       command=toggle_create_mode)
+create_btn.pack(side="left", padx=10)
+
+custom_test_btn = tk.Button(btn_row2, text="Test My Dataset", font=("Helvetica", 16, "bold"),
+                            bg="pale turquoise", relief="raised", padx=16, pady=10,
+                            command=run_custom_test)
+custom_test_btn.pack(side="left", padx=10)
+
+create_count_label = tk.Label(btn_row2,
+                              text=f"Custom dataset: {len(_custom_entries)} entries saved",
+                              font=("Helvetica", 13), bg="pale turquoise")
+create_count_label.pack(side="left", padx=16)
+
+# ── Stats panel ───────────────────────────────────────────────────────────────
 stats_frame = tk.Frame(middle_frame, bg="pale turquoise")
-stats_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+stats_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+
 progress_bar = ttk.Progressbar(stats_frame, orient="horizontal", length=600, mode="determinate", maximum=len(testsample))
 progress_bar.pack(pady=4)
 progress_label = tk.Label(stats_frame, text="Press the 907 button to start the standardised test", font=("Helvetica", 13), bg="pale turquoise")
