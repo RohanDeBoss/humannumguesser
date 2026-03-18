@@ -1,5 +1,4 @@
-# Version 2.8 - Golden 12.128% Baseline + ABA Alternating Detector
-# 12.238 WOW!
+# Version 3.0 small cleanups
 
 import os
 import pygame
@@ -36,6 +35,9 @@ for i, val in enumerate(dataset):
     dataset_counts[val] += 1
     dataset_indices[val].append(i)
 
+# Precompute int version of dataset for RF full model
+dataset_int = [int(x) for x in dataset]
+
 # ── Precompute base Markov chains once at startup ─────────────────────────────
 def _build_base_mc(data, k):
     mc = {}
@@ -65,7 +67,7 @@ def _build_base_rf(data, n_lags=2):
 
 _base_rf_first = _build_base_rf(firstdataset)
 _base_rf_second = _build_base_rf(seconddataset)
-_base_rf_full = _build_base_rf(dataset)
+_base_rf_full = _build_base_rf(dataset_int)
 
 def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
     combined = base_seq + user_seq
@@ -230,10 +232,15 @@ def differencepred():
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
 
+    # FIX v2.9: cast inputted to ints so _base_rf_full (trained on dataset_int) receives
+    # numeric features instead of strings, which previously caused a silent except-swallowed
+    # failure meaning this entire branch contributed nothing every round.
     nextfirstdiff = None
-    try: nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset, inputted)))
+    try:
+        inputted_int = [int(x) for x in inputted]
+        nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset_int, inputted_int)))
     except: pass
-    if nextseconddiff: othernormaldist(int(nextfirstdiff), 8)
+    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 8)
     nextfirstdiff = None
 
     try:
@@ -254,7 +261,7 @@ def main():
     confidence = differencepred()
 
     input_len = len(inputted)
-    base_add  = (20609 + input_len) / 7500000
+    base_add  = (len(dataset) + input_len) / 7500000 # best
 
     for val, count in dataset_counts.items():
         if val in confidence:
@@ -332,15 +339,15 @@ def main():
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 20
     except: pass
 
-    # ── NEW: ABA Alternating Number Detector ─────────────────────────────────────
-    # Catches human bounce patterns (e.g. 50, 25, 50 -> predicts 25) 
+    # ── ABA Alternating Number Detector ──────────────────────────────────────
+    # Catches human bounce patterns (e.g. 50, 25, 50 -> predicts 25)
     # one step earlier than the Alternating Jump Detector.
     try:
         if len(inputted) >= 3 and inputted[-1] == inputted[-3] and inputted[-1] != inputted[-2]:
             next_element = inputted[-2]
             if (0 <= int(next_element) <= 100): confidence[str(next_element)] += 25
     except: pass
-    # ─────────────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Alternating Jump Detector
     try:
@@ -389,13 +396,16 @@ def main():
                 if count >= 2:
                     confidence[next_val] += (count ** 3.5) * 2
     except: pass
-
+    
     if (len(inputted)) == 0: return "37"
-    try:
-        if (inputted[-1] == played[1]) and (inputted[-2] == played[2]): return played[0]
-    except: pass
+
     if max(confidence.items()) == 0.0: return inputted[-1]
     inverted_confidence = {v: k for k, v in confidence.items()}
+
+    # ADD IT HERE, just before the return
+    top5 = sorted(confidence.items(), key=lambda x: x[1], reverse=True)[:5]
+    print(f"Winner: {top5[0][0]} ({top5[0][1]:.2f}) | 2nd: {top5[1][0]} ({top5[1][1]:.2f}) | margin: {top5[0][1]-top5[1][1]:.2f}")
+
     return inverted_confidence[max(confidence.values())]
 
 
