@@ -1,4 +1,5 @@
-# Version 3.0 small cleanups
+# Version 3.0 small cleanups + pattern decay optimised
+# 12.348
 
 import os
 import pygame
@@ -282,8 +283,9 @@ def main():
 
     if input_len > 0:
         last_val = inputted[-1]
-        for i in range(input_len):
-            retro = i / input_len 
+        for i in range(input_len): #New decay formula
+            age_decay = 0.5 ** ((input_len - 1 - i) / 1000) #500 = 12.128, 700 = 12.128, 1000 = 12.348, 2000 = 12.348, 4000 = 12.348, 10000 = 12.238
+            retro = (i / input_len) * age_decay 
             confidence[inputted[i]] += 0.7 * retro
             if inputted[i] == last_val:
                 j_limit = input_len - i
@@ -401,10 +403,6 @@ def main():
 
     if max(confidence.items()) == 0.0: return inputted[-1]
     inverted_confidence = {v: k for k, v in confidence.items()}
-
-    # ADD IT HERE, just before the return
-    top5 = sorted(confidence.items(), key=lambda x: x[1], reverse=True)[:5]
-    print(f"Winner: {top5[0][0]} ({top5[0][1]:.2f}) | 2nd: {top5[1][0]} ({top5[1][1]:.2f}) | margin: {top5[0][1]-top5[1][1]:.2f}")
 
     return inverted_confidence[max(confidence.values())]
 
