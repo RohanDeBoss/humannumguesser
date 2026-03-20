@@ -1,6 +1,6 @@
-# Version 3.6 Bug fix
-#907: 12.348
-#my: 7.7
+# Version 3.8 stronger retro sequence + ratio rule
+#907: 12.348 -> 12.679
+#my: 7.7 -> 7.85
 
 import os
 import glob
@@ -262,7 +262,7 @@ def differencepred():
             model.fit(X_train, y_train)
             nextfirstdiff = int(model.predict(X_pred)[0])
     except: pass
-    if nextfirstdiff == 100: nextseconddiff = 0
+    if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try:
             X_train, y_train, X_pred = get_xgb_features(secondinp, 10)
@@ -278,18 +278,18 @@ def differencepred():
         inputted_int = [int(x) for x in inputted]
         nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset_int, inputted_int)))
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 8)
+    if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 8)
     nextfirstdiff = None
 
     try:
         mc = _mc_from_base(_base_mc_full, inputted, 1)
         nextfirstdiff = int(predict_next_elementmark(mc, tuple(main_train[-1:])))
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.6)
+    if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 4.6)
     nextfirstdiff = None
     try: nextfirstdiff = frequency2[inputted[-1]]
     except: pass
-    if nextfirstdiff: othernormaldist(int(nextfirstdiff), 4.7)
+    if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 4.7)
     return confidence
 
 def main():
@@ -329,7 +329,7 @@ def main():
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
                     if L >= 2:
-                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 11 * retro
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 12 * retro
                     elif L == 1:
                         confidence[inputted[i + 1]] += 3.5 * retro
 
@@ -348,7 +348,7 @@ def main():
         if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
             next_element = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
             if 0 <= int(next_element) <= 9:  next_element = f"0{next_element}"
-            if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 7
+            if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 15
     except: pass
 
     try:
@@ -418,9 +418,8 @@ def main():
     except: pass
 
     if len(inputted) == 0: return "37"
-    if max(confidence.items()) == 0.0: return inputted[-1]
-    inverted_confidence = {v: k for k, v in confidence.items()}
-    return inverted_confidence[max(confidence.values())]
+    if max(confidence.values()) == 0.0: return inputted[-1]
+    return max(confidence, key=confidence.get)
 
 
 # ── Manual history bar ────────────────────────────────────────────────────────
