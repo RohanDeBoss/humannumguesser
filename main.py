@@ -1,5 +1,6 @@
-# Version 3.5 complete UI overhaul + Tweak to value
-# base:12.459 -> 12.348, my_dataset:7.650 -> 7.7
+# Version 3.6 Bug fix
+#907: 12.348
+#my: 7.7
 
 import os
 import glob
@@ -558,6 +559,10 @@ def run_selected_test(event=None):
             progress_label.config(text=f"'{sel}' is empty or missing.")
             return
         label = sel
+    _reset_session()
+    progress_bar["value"] = 0
+    streak_label.config(text="Streak  0   Best  0   Worst loss  0")
+    last_label.config(text="Waiting...", bg=BG, fg="#333333")
     _test_running = True
     run_test_btn.config(state="disabled")
     _run_auto_test(sample, label)
