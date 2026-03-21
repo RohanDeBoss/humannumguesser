@@ -1,6 +1,6 @@
-# Version 3.8 stronger retro sequence + ratio rule
-#907: 12.348 -> 12.679
-#my: 7.7 -> 7.85
+# Version 3.9 stronger retro sequence + diff/ratio rules
+#907: 12.679 -> 12.789
+#my: 7.85 -> 7.95
 
 import os
 import glob
@@ -329,14 +329,14 @@ def main():
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
                     if L >= 2:
-                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 12 * retro
+                        confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 13 * retro
                     elif L == 1:
                         confidence[inputted[i + 1]] += 3.5 * retro
 
     if (len(inputted) >= 2) and (int(inputted[-2]) - int(inputted[-1]) in {1,2,3,5,10,20,-1,-2,-3,-5,-10,-20}):
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
         if 0 <= next_element <= 9: next_element = f"0{next_element}"
-        if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 10
+        if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 12
 
     if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
         difference   = int(inputted[-1]) - int(inputted[-2])
@@ -348,7 +348,7 @@ def main():
         if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
             next_element = int(int(inputted[-1]) * (int(inputted[-1]) / int(inputted[-2])))
             if 0 <= int(next_element) <= 9:  next_element = f"0{next_element}"
-            if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 15
+            if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 18
     except: pass
 
     try:
@@ -449,6 +449,8 @@ def numinput(event=None):
                 result_label.config(text=f"+{num_str}", bg=BG, fg="#22cc44")
                 result_label.after(400, lambda: result_label.config(text="", fg="black"))
             else:
+                if _test_ran:
+                    _reset_session()
                 returned = main()
                 inputted.append(input_text)
                 if 0 <= int(inputted[-1]) <= 9: inputted[-1] = f"0{inputted[-1]}"
@@ -760,7 +762,7 @@ result_frame.grid(row=3, column=0, sticky="ew", padx=30, pady=(4, 20))
 
 result_label = tk.Label(result_frame, text="",
                         font=("Helvetica", 52, "bold"),
-                        bg=ACCENT, fg="black", width=6,
+                        bg=ACCENT, fg="black",
                         relief="flat")
 result_label.pack(side="left", padx=(0, 30))
 
