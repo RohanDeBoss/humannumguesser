@@ -1,6 +1,6 @@
-# Version 3.9 stronger retro sequence + diff/ratio rules
-#907: 12.679 -> 12.789
-#my: 7.85 -> 7.95
+# Version 4.0 reshaped local continuation + ABABABA detector
+#907: 12.789 -> 12.900
+#my: 7.95 -> 7.90
 
 import os
 import glob
@@ -383,6 +383,11 @@ def main():
             next_element = inputted[-2]
             if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 100
     except: pass
+    try:
+        if len(inputted) >= 7 and inputted[-1] == inputted[-3] == inputted[-5] == inputted[-7] and inputted[-2] == inputted[-4] == inputted[-6] and inputted[-1] != inputted[-2]:
+            next_element = inputted[-2]
+            if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 150
+    except: pass
 
     try:
         if len(inputted) >= 4:
@@ -408,13 +413,13 @@ def main():
             for i in range(input_len - 1):
                 if inputted[i] == last_1: freq_1[inputted[i+1]] += 1
             for nv, c in freq_1.items():
-                if c >= 2: confidence[nv] += (c ** 3) * 1.5 #Increased from 2.5
+                if c >= 2: confidence[nv] += (c ** 3.2) * 0.9
         if input_len >= 3:
             lv1, lv2 = inputted[-1], inputted[-2]; freq_2 = defaultdict(int)
             for i in range(input_len - 2):
                 if inputted[i] == lv2 and inputted[i+1] == lv1: freq_2[inputted[i+2]] += 1
             for nv, c in freq_2.items():
-                if c >= 2: confidence[nv] += (c ** 3.5) * 2
+                if c >= 2: confidence[nv] += (c ** 3.5) * 1.8
     except: pass
 
     if len(inputted) == 0: return "37"
