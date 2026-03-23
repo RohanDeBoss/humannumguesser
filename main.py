@@ -1,6 +1,6 @@
-# Version 4.0 reshaped local continuation + ABABABA detector
-#907: 12.789 -> 12.900
-#my: 7.95 -> 7.90
+# Version 4.1 stronger alternating-difference rule
+#907: 12.900 -> 12.900
+#my: 7.90 -> 7.95
 
 import os
 import glob
@@ -395,7 +395,7 @@ def main():
             if d1 == d3 and d1 != d2:
                 next_element = int(inputted[-1]) + d2
                 if 0 <= next_element <= 9:  next_element = f"0{next_element}"
-                if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 20
+                if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 24
     except: pass
 
     try:

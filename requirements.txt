@@ -3,4 +3,3 @@ pygame
 numpy
 scikit-learn
 xgboost
-# Hey, I noticed something, for 2 digit numbers, the first digit is usually lower than the second one, but im not sure, maybe this is something that the program should also keep track of for the data guessed on the go as well, the idea is that we are building a profile of the guesser as the guess, so that we know what they tend to do. Patterns in their guesses, these are things we cant get from the larger dataset right?

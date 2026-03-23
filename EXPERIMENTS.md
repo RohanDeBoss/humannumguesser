@@ -1,9 +1,9 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.0`
+- `v4.1`
 - `907`: `117/907 = 12.899669%`
-- `my_dataset`: `158/2000 = 7.90%`
+- `my_dataset`: `159/2000 = 7.95%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
@@ -16,6 +16,8 @@ Known good accepted changes:
 - `v4.0`: added the `ABABABA` detector and reshaped the local continuation branch:
   - `freq_1`: `(c ** 3) * 1.5 -> (c ** 3.2) * 0.9`
   - `freq_2`: `(c ** 3.5) * 2 -> (c ** 3.5) * 1.8`
+- `v4.1`: stronger alternating-difference rule:
+  - `altdiff`: `20 -> 24`
 
 Useful working notes:
 - `ABABABA` by itself was neutral:
@@ -26,6 +28,24 @@ Useful working notes:
   - `(c ** 2.8) * 1.3 -> 117/907`, `157/2000`
   - `(c ** 2.6) * 1.4 -> 117/907`, `157/2000`
 - The first balanced uplift came only after combining the neutral `ABABABA` addition with a reshaped `freq_1/freq_2` local continuation branch.
+- The exact local-frequency plateau around `v4.0` is broad but not better:
+  - `freq_1 1.05 / 3.1` with `freq_2 1.8 / 3.5 -> 117/907`
+  - `freq_1 1.05 / 3.1` with `freq_2 1.9 / 3.4 -> 117/907`, ceiling `158/2000`
+  - `freq_1 0.95 / 3.2` with `freq_2 2.1 / 3.1 -> 117/907`, ceiling `158/2000`
+- The old improvement weights are now mostly flat:
+  - `retro_long 14 -> 117/907`, `158/2000`
+  - `ratio2 20 -> 117/907`, `158/2000`
+  - `retro14 + ratio20 -> 117/907`, ceiling `158/2000`
+  - `retro_long 15 -> 117/907`
+  - `ratio2 22 -> 117/907`
+- Arithmetic-rule retuning mostly tied `907` but did not help `my_dataset`, except one:
+  - `simplediff 11 -> 117/907`, ceiling `158/2000`
+  - `secondorder 18 -> 117/907`, ceiling `158/2000`
+  - `eqdiff 36 -> 117/907`, ceiling `158/2000`
+  - `altdiff 24 -> 117/907`, `159/2000`
+- Pushing those same branches harder starts to regress:
+  - `retro17 + ratio24 -> 116/907`
+  - `retro20 + ratio28 -> 115/907`
 
 Important benchmark trap:
 - The digit-branch truthiness checks are intentionally left as `if nextseconddiff and nextfirstdiff`.
@@ -213,6 +233,33 @@ Session-built frequency table blending:
   - `session_freq_additive_support_015 -> 114/907`
 - Conclusion: the static `frequency` table is too load-bearing on `907`; even gentle session-transition blending is currently net harmful.
 
+Session-only periodicity and uncertainty ideas:
+- Entropy-adaptive fallback to personal session frequency was clearly bad.
+- Results on `907`:
+  - `entropy_0.85_30 -> killed late; final ceiling 116/907`
+  - `entropy_0.80_30 -> killed late; final ceiling 116/907`
+  - `entropy_0.85_20 -> killed late; final ceiling 116/907`
+- Actual observed wins before kill were much lower (`71`, `65`, `79` respectively), so these were not near-misses.
+- Raw autocorrelation period detection on the session sequence did better, but still only tied the old baseline and missed the current one.
+- Results on `907`:
+  - `period_0.25_20 -> 116/907`
+  - `period_0.20_20 -> 116/907`
+- Because neither entropy nor period reached the current `117/907` baseline, stronger follow-up sweeps and combinations were skipped.
+- Conclusion: these session-only overlays do not beat the current ensemble on the 907 benchmark.
+
+Smarter existing-signal rewrites:
+- Recency-weighted `freq_1` transitions were worse across all screened half-life / multiplier combinations.
+- Results on `907`:
+  - `freq1_recency_hl100_m12 -> killed late; final ceiling 116/907`
+  - `freq1_recency_hl150_m12 -> killed late; final ceiling 116/907`
+  - `freq1_recency_hl200_m12 -> killed late; final ceiling 116/907`
+  - `freq1_recency_hl150_m8 -> killed late; final ceiling 116/907`
+  - `freq1_recency_hl150_m16 -> killed late; final ceiling 116/907`
+- The best actual observed run among them was only `113` wins before kill, so this was not a near-miss.
+- Positional modular bias was also screened and failed:
+  - `positional_0.8 -> killed late; final ceiling 116/907`
+- Conclusion: making the local continuation rule more recency-sensitive or adding modulo-position bias did not improve the current v4.0 ensemble.
+
 ## Older micro-tuning already exhausted
 
 These were swept repeatedly before the structural tests and did not produce a stable improvement over the current accepted baseline path:
@@ -256,3 +303,7 @@ Do not waste time re-testing:
 - Exponential dataset long-match growth
 - Hard wrong-prediction penalties
 - Session-frequency blending that fades or supplements the static `frequency` branch
+- Entropy-adaptive fallback to personal session frequency
+- Raw autocorrelation period detection on the full numeric session sequence
+- Recency-weighted replacement for the current `freq_1` session continuation rule
+- Positional modular bias by sequence index bucket
