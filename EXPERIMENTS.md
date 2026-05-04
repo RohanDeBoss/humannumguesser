@@ -43,6 +43,11 @@ Useful working notes:
   - `secondorder 18 -> 117/907`, ceiling `158/2000`
   - `eqdiff 36 -> 117/907`, ceiling `158/2000`
   - `altdiff 24 -> 117/907`, `159/2000`
+- Local bracket around `altdiff 24` suggests `24` is the best nearby setting:
+  - `altdiff 22 -> 117/907`, ceiling `159/2000`
+  - `altdiff 23 -> 117/907`, ceiling `159/2000`
+  - `altdiff 25 -> 117/907`, ceiling `159/2000`
+  - `altdiff 26 -> 117/907`, ceiling `159/2000`
 - Pushing those same branches harder starts to regress:
   - `retro17 + ratio24 -> 116/907`
   - `retro20 + ratio28 -> 115/907`
