@@ -1,13 +1,13 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.2`
-- `907`: `118/907 = 13.009923%`
-- `my_dataset`: `159/2000 = 7.95%`
+- `v4.3`
+- `907`: `130/907 = 14.332966%`
+- `my_dataset`: `164/2000 = 8.20%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
-- Only run `my_dataset` if the candidate is at least `117/907`.
+- Only run `my_dataset` if the candidate is at least `130/907`.
 - If a candidate only ties `907`, use `my_dataset` as the tiebreaker.
 
 Known good accepted changes:
@@ -22,8 +22,38 @@ Known good accepted changes:
   - If the last two entries differ by `9` or `-9`, add `15` confidence to the same-step continuation.
   - Exact verification: `907 -> 118/907`, `my_dataset -> 159/2000`.
   - Combined objective: `276 -> 277`.
+- `v4.3`: added a gated human-pattern bundle.
+  - Exact verification: `907 -> 130/907`, `my_dataset -> 164/2000`.
+  - Combined objective: `277 -> 294`.
+  - All gates are measured against the pre-v4.3 confidence snapshot so the new rules do not inflate each other's eligibility.
 
 ## Latest pass
+
+Accepted v4.3 bundle:
+- Double-digit ladder:
+  - Pattern: `00 -> 11 -> 22 -> ... -> 99`.
+  - Add `10` to the `+11` continuation when the candidate is within `15` confidence of the pre-v4.3 leader.
+  - Screened alone: `907 118 -> 122`, `my_dataset 159 -> 160`.
+- Repeat confirmation:
+  - If the last two inputs repeat, add `100` to another repeat only when that candidate was already pre-v4.3 rank `<= 3`.
+  - Screened alone: `907 118 -> 120`, `my_dataset 159 -> 159`.
+- Double-step arithmetic:
+  - For steps `11/22/33/44`, add `40` to same-step continuation when the candidate was pre-v4.3 rank `<= 8`.
+  - Add a focused extra `+20` for step `22`.
+  - Add small gated continuations for steps `29` and `24` when the candidate is within `15` confidence of the pre-v4.3 leader.
+  - Screened highlights: `11/22/33/44 -> 120/907 and 161/2000`; `22 -> 120/907 and 160/2000`.
+- Base order-2 transition:
+  - Use the filtered base dataset's top continuation for the last two numbers.
+  - Add `20` only when the top continuation appears at least `3` times and was already pre-v4.3 rank `<= 3`.
+  - Screened alone: `907 118 -> 119`, `my_dataset 159 -> 160`.
+
+Rejected / not kept from this pass:
+- Ungated broad arithmetic families: too many changed predictions for too little benefit.
+- High-weight triple-repeat rules: could improve `907`, but were less balanced than the rank-gated repeat rule.
+- Most base n-gram variants: order-2 with rank gating was the only one that helped both datasets.
+- Extra static `frequency` / `frequency2` boosts: did not produce a better accepted pair.
+
+## Previous pass
 
 Fast-screened candidate families after precomputing the unchanged expensive confidence state for `907`:
 - Extra two-number arithmetic seeds for missing common steps.

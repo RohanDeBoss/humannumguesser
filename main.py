@@ -1,6 +1,6 @@
-# Version 4.2 +/-9 two-number continuation seed
-#907: 12.900 -> 13.010
-#my: 7.95 -> 7.95
+# Version 4.3 gated human-pattern bundle
+#907: 13.010 -> 14.333
+#my: 7.95 -> 8.20
 
 import os
 import glob
@@ -105,6 +105,28 @@ def _build_base_mc(data, k):
 _base_mc_first  = _build_base_mc(firstdataset,  1)
 _base_mc_second = _build_base_mc(seconddataset, 1)
 _base_mc_full   = _build_base_mc(dataset,       1)
+_base_mc_full2  = _build_base_mc(dataset,       2)
+
+_number_order = {str(i).zfill(2): i for i in range(0, 101)}
+
+def _fmt_num(number):
+    number = int(number)
+    if number == 100: return "100"
+    if 0 <= number <= 9: return f"0{number}"
+    return str(number)
+
+def _confidence_rank(conf, candidate):
+    candidate_score = conf.get(candidate, 0)
+    candidate_order = _number_order.get(candidate, 999)
+    rank = 1
+    for key, score in conf.items():
+        if score > candidate_score or (score == candidate_score and _number_order.get(key, 999) < candidate_order):
+            rank += 1
+    return rank
+
+def _confidence_margin(conf, candidate):
+    if not conf: return 0
+    return max(conf.values()) - conf.get(candidate, 0)
 
 def prepare_data(sequence, n_lags=2):
     arr = np.array(sequence)
@@ -429,6 +451,54 @@ def main():
                 if inputted[i] == lv2 and inputted[i+1] == lv1: freq_2[inputted[i+2]] += 1
             for nv, c in freq_2.items():
                 if c >= 2: confidence[nv] += (c ** 3.5) * 1.8
+    except: pass
+
+    # v4.3 gates are measured against the pre-v4.3 confidence snapshot.
+    base_confidence = dict(confidence)
+
+    try:
+        if input_len >= 1 and inputted[-1] != "100" and inputted[-1][0] == inputted[-1][1]:
+            next_element = int(inputted[-1]) + 11
+            if 0 <= next_element <= 99:
+                candidate = _fmt_num(next_element)
+                if _confidence_margin(base_confidence, candidate) <= 15:
+                    confidence[candidate] += 10
+    except: pass
+
+    try:
+        if input_len >= 2 and inputted[-1] == inputted[-2]:
+            candidate = inputted[-1]
+            if _confidence_rank(base_confidence, candidate) <= 3:
+                confidence[candidate] += 100
+    except: pass
+
+    try:
+        if input_len >= 2:
+            step = int(inputted[-1]) - int(inputted[-2])
+            next_element = int(inputted[-1]) + step
+            if abs(step) in {11, 22, 33, 44} and 0 <= next_element <= 100:
+                candidate = _fmt_num(next_element)
+                if _confidence_rank(base_confidence, candidate) <= 8:
+                    confidence[candidate] += 40
+            if abs(step) == 22 and 0 <= next_element <= 100:
+                confidence[_fmt_num(next_element)] += 20
+            if abs(step) == 29 and 0 <= next_element <= 100:
+                candidate = _fmt_num(next_element)
+                if _confidence_margin(base_confidence, candidate) <= 15:
+                    confidence[candidate] += 8
+            if abs(step) == 24 and 0 <= next_element <= 100:
+                candidate = _fmt_num(next_element)
+                if _confidence_margin(base_confidence, candidate) <= 15:
+                    confidence[candidate] += 12
+    except: pass
+
+    try:
+        if input_len >= 2:
+            transitions = _base_mc_full2.get(tuple(inputted[-2:]))
+            if transitions:
+                candidate = max(transitions, key=transitions.get)
+                if transitions[candidate] >= 3 and _confidence_rank(base_confidence, candidate) <= 3:
+                    confidence[candidate] += 20
     except: pass
 
     if len(inputted) == 0: return "37"
