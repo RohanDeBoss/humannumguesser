@@ -1,8 +1,8 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.1`
-- `907`: `117/907 = 12.899669%`
+- `v4.2`
+- `907`: `118/907 = 13.009923%`
 - `my_dataset`: `159/2000 = 7.95%`
 
 Recommended screening workflow:
@@ -18,6 +18,31 @@ Known good accepted changes:
   - `freq_2`: `(c ** 3.5) * 2 -> (c ** 3.5) * 1.8`
 - `v4.1`: stronger alternating-difference rule:
   - `altdiff`: `20 -> 24`
+- `v4.2`: added a narrow two-number `+/-9` continuation seed:
+  - If the last two entries differ by `9` or `-9`, add `15` confidence to the same-step continuation.
+  - Exact verification: `907 -> 118/907`, `my_dataset -> 159/2000`.
+  - Combined objective: `276 -> 277`.
+
+## Latest pass
+
+Fast-screened candidate families after precomputing the unchanged expensive confidence state for `907`:
+- Extra two-number arithmetic seeds for missing common steps.
+- Exact period and partial-period cycle continuation for periods `3-6`.
+- Repeat/mirror/complement rules.
+- Modulo-101 wraparound arithmetic.
+
+Accepted:
+- `step9_w15`
+  - `907`: `117 -> 118`
+  - `my_dataset`: `159 -> 159`
+  - Rationale: humans often count by nines because it feels like a near-ten pattern; this catches that two-number seed without broadening the existing simple-difference rule.
+
+Rejected / not kept:
+- `+/-9` weights above `15`: tied `907` in the fast screen, but `15` is the smallest improving weight and safest to keep.
+- Broad `11/22/33/44` family: reached `118/907`, but it is broader and less isolated than the accepted `+/-9` rule.
+- Triple-repeat continuation at high weight: reached `118/907`, but required a much heavier `100+` confidence push.
+- Cold-start `15`: reached `118/907`, but was rejected as a benchmark-specific first-value guess rather than a genuine predictor.
+- Period, mirror, complement, and modulo-wrap rules: did not beat `117/907`.
 
 Useful working notes:
 - `ABABABA` by itself was neutral:

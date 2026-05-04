@@ -1,6 +1,6 @@
-# Version 4.1 stronger alternating-difference rule
-#907: 12.900 -> 12.900
-#my: 7.90 -> 7.95
+# Version 4.2 +/-9 two-number continuation seed
+#907: 12.900 -> 13.010
+#my: 7.95 -> 7.95
 
 import os
 import glob
@@ -337,6 +337,15 @@ def main():
         next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2]))
         if 0 <= next_element <= 9: next_element = f"0{next_element}"
         if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 12
+
+    try:
+        if input_len >= 2:
+            extra_diff = int(inputted[-1]) - int(inputted[-2])
+            if extra_diff in {9, -9}:
+                next_element = int(inputted[-1]) + extra_diff
+                if 0 <= next_element <= 9: next_element = f"0{next_element}"
+                if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 15
+    except: pass
 
     if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
         difference   = int(inputted[-1]) - int(inputted[-2])
