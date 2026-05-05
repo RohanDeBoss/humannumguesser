@@ -55,6 +55,8 @@ For large searches, do not rerun the expensive XGBoost path for every candidate.
 - the base prediction,
 - the actual answer.
 
+For late-stage add-on rules, inject an extra snapshot immediately before the final `return max(confidence, key=confidence.get)` and screen candidates on top of that final confidence dict. That caught the v4.8 `last - 9` rule: screening earlier snapshots missed the real interaction with the v4.7 add-ons.
+
 Then screen candidate rules by copying that confidence dict, adding the candidate's proposed confidence, and reselecting `max(confidence, key=confidence.get)`. This makes hundreds or thousands of additive-rule sweeps cheap while preserving the exact current predictor state. Once a candidate beats the baseline in the fast screen, patch it into `main.py` and run the exact harness above.
 
 Useful scoring discipline:

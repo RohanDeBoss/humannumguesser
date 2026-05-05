@@ -1,6 +1,6 @@
-# Version 4.7 light increment and gated digit-prepend
-#907: 14.994 -> 15.436
-#my: 8.30 -> 8.35
+# Version 4.8 gated near-ten decrement
+#907: 15.436 -> 15.436
+#my: 8.35 -> 8.45
 
 import os
 import glob
@@ -544,6 +544,15 @@ def main():
             candidate = f"{(int(inputted[-1][0]) + int(inputted[-1][1])) % 10}{inputted[-1][0]}"
             if _confidence_margin(v46_confidence, candidate) <= 4:
                 confidence[candidate] += 4
+    except: pass
+
+    try:
+        if input_len >= 1:
+            next_element = int(inputted[-1]) - 9
+            if 0 <= next_element <= 100:
+                candidate = _fmt_num(next_element)
+                if _confidence_margin(confidence, candidate) <= 3:
+                    confidence[candidate] += 3
     except: pass
 
     if len(inputted) == 0: return "37"

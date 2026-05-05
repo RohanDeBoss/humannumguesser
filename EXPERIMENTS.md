@@ -1,9 +1,9 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.7`
+- `v4.8`
 - `907`: `140/907 = 15.435502%`
-- `my_dataset`: `167/2000 = 8.35%`
+- `my_dataset`: `169/2000 = 8.45%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
@@ -38,8 +38,25 @@ Known good accepted changes:
 - `v4.7`: added a light increment prior and a gated digit-prepend transform.
   - Exact verification: `907 -> 140/907`, `my_dataset -> 167/2000`.
   - Combined objective: `302 -> 307`.
+- `v4.8`: added a final-stage gated near-ten decrement.
+  - Exact verification: `907 -> 140/907`, `my_dataset -> 169/2000`.
+  - Combined objective: `307 -> 309`.
 
 ## Latest pass
+
+Accepted v4.8 rule:
+- Final-stage near-ten decrement:
+  - Candidate form: `last - 9`.
+  - Add `3` only when the candidate is within `3` confidence of the current final leader.
+  - Exact saved-file verification:
+    - `907`: `140 -> 140`
+    - `my_dataset`: `167 -> 169`
+    - Combined: `307 -> 309`
+
+Rejected / not kept from this pass:
+- Broad tuning of the newer v4.3-v4.7 values found my_dataset-only gains, but exact `907` verification rejected the main candidate (`140 -> 132`).
+- Retuning digit-prepend from `+4 / margin 4` to `+6 / margin 6` simulated as helpful on `my_dataset`, but exact verification dropped `907` to `137`, so it was rolled back.
+- A final-confidence sweep over digit transforms and simple offsets found many `907` ties/small gains; the accepted `last - 9` rule was the best exact-verified combined improvement from that sweep.
 
 Accepted v4.7 bundle:
 - Light increment prior:
