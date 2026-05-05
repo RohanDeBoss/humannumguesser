@@ -1,6 +1,6 @@
-# Version 4.6 stronger focused step-22 continuation
-#907: 14.884 -> 14.994
-#my: 8.30 -> 8.30
+# Version 4.7 light increment and gated digit-prepend
+#907: 14.994 -> 15.436
+#my: 8.30 -> 8.35
 
 import os
 import glob
@@ -527,6 +527,23 @@ def main():
             candidate = f"{inputted[-1][1]}{(int(inputted[-1][0]) + int(inputted[-1][1])) % 10}"
             if _confidence_rank(v43_confidence, candidate) <= 5:
                 confidence[candidate] += 6
+    except: pass
+
+    # v4.7 gates are measured after v4.6, before the v4.7 add-ons.
+    v46_confidence = dict(confidence)
+
+    try:
+        if input_len >= 1:
+            next_element = int(inputted[-1]) + 1
+            if 0 <= next_element <= 100:
+                confidence[_fmt_num(next_element)] += 2
+    except: pass
+
+    try:
+        if input_len >= 1 and inputted[-1] != "100":
+            candidate = f"{(int(inputted[-1][0]) + int(inputted[-1][1])) % 10}{inputted[-1][0]}"
+            if _confidence_margin(v46_confidence, candidate) <= 4:
+                confidence[candidate] += 4
     except: pass
 
     if len(inputted) == 0: return "37"

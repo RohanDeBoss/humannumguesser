@@ -1,13 +1,13 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.6`
-- `907`: `136/907 = 14.994487%`
-- `my_dataset`: `166/2000 = 8.30%`
+- `v4.7`
+- `907`: `140/907 = 15.435502%`
+- `my_dataset`: `167/2000 = 8.35%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
-- Only run `my_dataset` if the candidate is at least `136/907`.
+- Only run `my_dataset` if the candidate is at least `140/907`.
 - If a candidate only ties `907`, use `my_dataset` as the tiebreaker.
 
 Known good accepted changes:
@@ -35,8 +35,32 @@ Known good accepted changes:
 - `v4.6`: strengthened the focused `abs(step) == 22` continuation.
   - Exact verification: `907 -> 136/907`, `my_dataset -> 166/2000`.
   - Combined objective: `301 -> 302`.
+- `v4.7`: added a light increment prior and a gated digit-prepend transform.
+  - Exact verification: `907 -> 140/907`, `my_dataset -> 167/2000`.
+  - Combined objective: `302 -> 307`.
 
 ## Latest pass
+
+Accepted v4.7 bundle:
+- Light increment prior:
+  - Add `2` to `last + 1`.
+  - Screened alone: `907 136 -> 138`, `my_dataset 166 -> 167`.
+- Gated digit-prepend transform:
+  - Candidate form: for `ab`, try `(a+b mod 10)a`.
+  - Add `4` only when the candidate is within `4` confidence of the post-v4.6 leader.
+  - Combined with the light increment prior:
+    - `907`: `136 -> 140`
+    - `my_dataset`: `166 -> 167`
+    - Combined: `302 -> 307`
+
+Rejected / not kept from this pass:
+- Penalising current prediction `65`:
+  - Screened well on `907` (`136 -> 138`) but hurt `my_dataset` (`166 -> 165`).
+- Rank-gated append-sum transform:
+  - Improved `907`, but hurt `my_dataset` too much to keep.
+- Several n-gram and delta candidates reached only `137/907` and were not worth running on `my_dataset`.
+
+## v4.6 Pass
 
 Accepted v4.6 change:
 - Focused step-22 continuation:

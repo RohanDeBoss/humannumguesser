@@ -2,7 +2,7 @@
 
 ## winrate
 
-the current winrate on the 907 standardized test is `14.994%`
+the current winrate on the 907 standardized test is `15.436%`
 
 ## note
 
