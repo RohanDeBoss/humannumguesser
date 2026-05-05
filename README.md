@@ -59,6 +59,8 @@ For late-stage add-on rules, inject an extra snapshot immediately before the fin
 
 Then screen candidate rules by copying that confidence dict, adding the candidate's proposed confidence, and reselecting `max(confidence, key=confidence.get)`. This makes hundreds or thousands of additive-rule sweeps cheap while preserving the exact current predictor state. Once a candidate beats the baseline in the fast screen, patch it into `main.py` and run the exact harness above.
 
+For speed work, profile before editing. In v4.9 the useful win was capping live XGBoost retraining at `XGB_HISTORY_LIMIT = 700`; removing XGBoost entirely was faster but lost too many `907` hits.
+
 Useful scoring discipline:
 - Always screen `907` first. It is shorter and is the primary gate.
 - Only run `my_dataset` after a candidate beats or meaningfully ties the current `907` baseline.

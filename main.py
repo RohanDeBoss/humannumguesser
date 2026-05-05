@@ -1,6 +1,6 @@
-# Version 4.8 gated near-ten decrement
+# Version 4.9 capped XGBoost history
 #907: 15.436 -> 15.436
-#my: 8.35 -> 8.45
+#my: 8.45 -> 8.50
 
 import os
 import glob
@@ -30,6 +30,7 @@ wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 
 global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
 inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
+XGB_HISTORY_LIMIT = 700
 
 # ── Dataset management ────────────────────────────────────────────────────────
 _create_mode     = False
@@ -145,9 +146,13 @@ _base_rf_second = _build_base_rf(seconddataset)
 _base_rf_full   = _build_base_rf(dataset_int)
 
 def predict_next_fast(base_rf, base_seq, user_seq, n_lags=2):
-    combined = base_seq + user_seq
-    if len(combined) < n_lags + 1: raise ValueError("short")
-    last_values = np.array(combined[-n_lags:]).reshape(1, -1)
+    combined_len = len(base_seq) + len(user_seq)
+    if combined_len < n_lags + 1: raise ValueError("short")
+    if len(user_seq) >= n_lags:
+        recent_values = user_seq[-n_lags:]
+    else:
+        recent_values = (base_seq + user_seq)[-n_lags:]
+    last_values = np.array(recent_values).reshape(1, -1)
     pred_base = base_rf.predict(last_values)[0]
     if len(user_seq) >= n_lags + 1:
         X, y = prepare_data(user_seq, n_lags)
@@ -242,10 +247,6 @@ def differencepred():
         secondinp.append(int(inputted[-1][1]))
     except: pass
 
-    first_train  = firstdataset  + firstinp
-    second_train = seconddataset + secondinp
-    main_train   = dataset       + inputted
-
     nextfirstdiff, nextseconddiff = None, None
     try: nextfirstdiff = round(float(predict_next_fast(_base_rf_first, firstdataset, firstinp)))
     except ValueError: pass
@@ -266,20 +267,20 @@ def differencepred():
 
     try:
         mc = _mc_from_base(_base_mc_first, firstinp, 1)
-        nextfirstdiff = int(predict_next_elementmark(mc, tuple(first_train[-1:])))
+        nextfirstdiff = int(predict_next_elementmark(mc, tuple(firstinp[-1:])))
     except: pass
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try:
             mc = _mc_from_base(_base_mc_second, secondinp, 1)
-            nextseconddiff = int(predict_next_elementmark(mc, tuple(second_train[-1:])))
+            nextseconddiff = int(predict_next_elementmark(mc, tuple(secondinp[-1:])))
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.7)
     nextfirstdiff, nextseconddiff = None, None
 
     try:
         X_train, y_train, X_pred = get_xgb_features(firstinp, 10)
-        if len(y_train) > 0:
+        if len(y_train) > 0 and len(firstinp) <= XGB_HISTORY_LIMIT:
             model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
             model.fit(X_train, y_train)
             nextfirstdiff = int(model.predict(X_pred)[0])
@@ -288,7 +289,7 @@ def differencepred():
     else:
         try:
             X_train, y_train, X_pred = get_xgb_features(secondinp, 10)
-            if len(y_train) > 0:
+            if len(y_train) > 0 and len(secondinp) <= XGB_HISTORY_LIMIT:
                 model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
                 model.fit(X_train, y_train)
                 nextseconddiff = int(model.predict(X_pred)[0])
@@ -305,7 +306,7 @@ def differencepred():
 
     try:
         mc = _mc_from_base(_base_mc_full, inputted, 1)
-        nextfirstdiff = int(predict_next_elementmark(mc, tuple(main_train[-1:])))
+        nextfirstdiff = int(predict_next_elementmark(mc, tuple(inputted[-1:])))
     except: pass
     if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 4.6)
     nextfirstdiff = None

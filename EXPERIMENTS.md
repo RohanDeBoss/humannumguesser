@@ -1,9 +1,9 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.8`
+- `v4.9`
 - `907`: `140/907 = 15.435502%`
-- `my_dataset`: `169/2000 = 8.45%`
+- `my_dataset`: `170/2000 = 8.50%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
@@ -41,8 +41,29 @@ Known good accepted changes:
 - `v4.8`: added a final-stage gated near-ten decrement.
   - Exact verification: `907 -> 140/907`, `my_dataset -> 169/2000`.
   - Combined objective: `307 -> 309`.
+- `v4.9`: capped the expensive live XGBoost branch to histories of `<= 700`.
+  - Exact verification: `907 -> 140/907`, `my_dataset -> 170/2000`.
+  - Combined objective: `309 -> 310`.
+  - Exact saved-file timing in this pass: `907 83.876s`, `my_dataset 137.475s`, combined `221.35s`.
 
 ## Latest pass
+
+Accepted v4.9 speed/score change:
+- Capped the first-digit and second-digit live XGBoost retraining branches at `XGB_HISTORY_LIMIT = 700`.
+- Rationale: XGBoost was one of the dominant runtime costs in profiling, but the late-history fits were not paying their way.
+- Exact saved-file verification:
+  - `907`: `140 -> 140`
+  - `my_dataset`: `169 -> 170`
+  - Combined: `309 -> 310`
+  - Runtime: `907 83.876s`, `my_dataset 137.475s`, total `221.35s`
+
+Rejected / not kept from this speed pass:
+- Replacing full Markov-chain copies with a per-call merged-state scan preserved `907`, but slowed the benchmark.
+- An incremental Markov cache also preserved `907`, but was still slower in exact timing.
+- Base-only RandomForest prediction was faster, but dropped `907` to `136`.
+- Disabling XGBoost entirely was much faster and kept `my_dataset` high, but dropped `907` too far. Additive recovery rules could tie the combined score but did not preserve the `907` baseline, so they were rejected.
+- Reducing RandomForest tree count to `5` dropped `907` to `130`.
+- Early-history RandomForest gating preserved scores in some screens, but did not produce a convincing exact timing win.
 
 Accepted v4.8 rule:
 - Final-stage near-ten decrement:
