@@ -1,13 +1,13 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.3`
-- `907`: `130/907 = 14.332966%`
-- `my_dataset`: `164/2000 = 8.20%`
+- `v4.4`
+- `907`: `135/907 = 14.884234%`
+- `my_dataset`: `166/2000 = 8.30%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
-- Only run `my_dataset` if the candidate is at least `130/907`.
+- Only run `my_dataset` if the candidate is at least `135/907`.
 - If a candidate only ties `907`, use `my_dataset` as the tiebreaker.
 
 Known good accepted changes:
@@ -26,8 +26,41 @@ Known good accepted changes:
   - Exact verification: `907 -> 130/907`, `my_dataset -> 164/2000`.
   - Combined objective: `277 -> 294`.
   - All gates are measured against the pre-v4.3 confidence snapshot so the new rules do not inflate each other's eligibility.
+- `v4.4`: added a directional micro-pattern bundle.
+  - Exact verification: `907 -> 135/907`, `my_dataset -> 166/2000`.
+  - Combined objective: `294 -> 301`.
+  - All gates are measured against the post-v4.3 confidence snapshot, before the v4.4 add-ons.
 
 ## Latest pass
+
+Accepted v4.4 bundle:
+- Direction-unit continuation:
+  - If the latest move was upward, add `6` to `last + 1`; if downward, add `6` to `last - 1`.
+  - Screened alone: `907 130 -> 133`, `my_dataset 164 -> 166`.
+- Downward double ladder:
+  - Pattern: `99 -> 88 -> 77 -> ... -> 00`.
+  - Add `15` to the `-11` continuation when the candidate is within `25` confidence of the post-v4.3 leader.
+  - Screened with the direction-unit rule as part of the accepted combo.
+- Rank-gated digit append transform:
+  - Candidate form: for `ab`, try `b(a+b mod 10)`.
+  - Add `6` only when that candidate is already post-v4.3 rank `<= 5`.
+  - This did not help `my_dataset` alone, but combined cleanly with the accepted directional pair.
+
+Accepted combo:
+- `sign_unit_w6 + double_down_margin25_w15 + append_rank5_w6`
+  - `907`: `130 -> 135`
+  - `my_dataset`: `164 -> 166`
+  - Combined: `294 -> 301`
+
+Rejected / not kept from this pass:
+- Top-three base prior (`12`, `90`, `01`) with rank gate:
+  - Screened well on `907` (`130 -> 134`) but hurt `my_dataset` (`164 -> 162`).
+- Sign-unit plus top-three base prior:
+  - Kept `907` strong but erased the `my_dataset` gain.
+- Broad ungated downward double ladder:
+  - Could add one `907` hit, but changed too many predictions compared with the gated version.
+
+## v4.3 Pass
 
 Accepted v4.3 bundle:
 - Double-digit ladder:
@@ -53,7 +86,7 @@ Rejected / not kept from this pass:
 - Most base n-gram variants: order-2 with rank gating was the only one that helped both datasets.
 - Extra static `frequency` / `frequency2` boosts: did not produce a better accepted pair.
 
-## Previous pass
+## v4.2 Pass
 
 Fast-screened candidate families after precomputing the unchanged expensive confidence state for `907`:
 - Extra two-number arithmetic seeds for missing common steps.

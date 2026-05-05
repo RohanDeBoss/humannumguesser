@@ -1,6 +1,6 @@
-# Version 4.3 gated human-pattern bundle
-#907: 13.010 -> 14.333
-#my: 7.95 -> 8.20
+# Version 4.4 directional micro-pattern bundle
+#907: 14.333 -> 14.884
+#my: 8.20 -> 8.30
 
 import os
 import glob
@@ -499,6 +499,34 @@ def main():
                 candidate = max(transitions, key=transitions.get)
                 if transitions[candidate] >= 3 and _confidence_rank(base_confidence, candidate) <= 3:
                     confidence[candidate] += 20
+    except: pass
+
+    # v4.4 gates are measured after v4.3, before the v4.4 add-ons.
+    v43_confidence = dict(confidence)
+
+    try:
+        if input_len >= 3:
+            unit_step = int(inputted[-1]) - int(inputted[-2])
+            if unit_step != 0:
+                next_element = int(inputted[-1]) + (1 if unit_step > 0 else -1)
+                if 0 <= next_element <= 100:
+                    confidence[_fmt_num(next_element)] += 6
+    except: pass
+
+    try:
+        if input_len >= 1 and inputted[-1] != "100" and inputted[-1][0] == inputted[-1][1]:
+            next_element = int(inputted[-1]) - 11
+            if 0 <= next_element <= 99:
+                candidate = _fmt_num(next_element)
+                if _confidence_margin(v43_confidence, candidate) <= 25:
+                    confidence[candidate] += 15
+    except: pass
+
+    try:
+        if input_len >= 1 and inputted[-1] != "100":
+            candidate = f"{inputted[-1][1]}{(int(inputted[-1][0]) + int(inputted[-1][1])) % 10}"
+            if _confidence_rank(v43_confidence, candidate) <= 5:
+                confidence[candidate] += 6
     except: pass
 
     if len(inputted) == 0: return "37"
