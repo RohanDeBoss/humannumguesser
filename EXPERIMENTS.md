@@ -1,13 +1,13 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.4`
-- `907`: `135/907 = 14.884234%`
+- `v4.6`
+- `907`: `136/907 = 14.994487%`
 - `my_dataset`: `166/2000 = 8.30%`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
-- Only run `my_dataset` if the candidate is at least `135/907`.
+- Only run `my_dataset` if the candidate is at least `136/907`.
 - If a candidate only ties `907`, use `my_dataset` as the tiebreaker.
 
 Known good accepted changes:
@@ -30,8 +30,27 @@ Known good accepted changes:
   - Exact verification: `907 -> 135/907`, `my_dataset -> 166/2000`.
   - Combined objective: `294 -> 301`.
   - All gates are measured against the post-v4.3 confidence snapshot, before the v4.4 add-ons.
+- `v4.5`: reduced the static digit frequency branch, XGBoost digit branch, and full RF branch slightly.
+  - Exact verification from local notes: no score change.
+- `v4.6`: strengthened the focused `abs(step) == 22` continuation.
+  - Exact verification: `907 -> 136/907`, `my_dataset -> 166/2000`.
+  - Combined objective: `301 -> 302`.
 
 ## Latest pass
+
+Accepted v4.6 change:
+- Focused step-22 continuation:
+  - `abs(step) == 22` extra confidence `20 -> 40`.
+  - Exact saved-file verification:
+    - `907`: `135 -> 136`
+    - `my_dataset`: `166 -> 166`
+  - Combined: `301 -> 302`
+
+Rejected / not kept from this pass:
+- Broad coordinate and random retunes of the v4.3/v4.4 bundle mostly tied or regressed on `907`.
+- The only `907`-clearing retune found in this pass was the focused step-22 boost, so `my_dataset` was only run for that candidate.
+
+## v4.4 Pass
 
 Accepted v4.4 bundle:
 - Direction-unit continuation:

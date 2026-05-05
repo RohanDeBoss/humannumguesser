@@ -1,6 +1,6 @@
-# Version 4.4 directional micro-pattern bundle
-#907: 14.333 -> 14.884
-#my: 8.20 -> 8.30
+# Version 4.6 stronger focused step-22 continuation
+#907: 14.884 -> 14.994
+#my: 8.30 -> 8.30
 
 import os
 import glob
@@ -260,7 +260,7 @@ def differencepred():
         nextfirstdiff = frequency[inputted[-1]][0]
         if nextfirstdiff == 10: nextseconddiff = 0
         else: nextseconddiff = frequency[inputted[-1]][1]
-        normaldist(nextfirstdiff, nextseconddiff, 1.1)
+        normaldist(nextfirstdiff, nextseconddiff, 1.05)  # Reduced from 1.1
     except: pass
     nextfirstdiff, nextseconddiff = None, None
 
@@ -293,14 +293,14 @@ def differencepred():
                 model.fit(X_train, y_train)
                 nextseconddiff = int(model.predict(X_pred)[0])
         except: pass
-    if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.1)
+    if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.05)
 
     nextfirstdiff = None
     try:
         inputted_int = [int(x) for x in inputted]
         nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset_int, inputted_int)))
     except: pass
-    if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 8)
+    if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 7.8)
     nextfirstdiff = None
 
     try:
@@ -481,7 +481,7 @@ def main():
                 if _confidence_rank(base_confidence, candidate) <= 8:
                     confidence[candidate] += 40
             if abs(step) == 22 and 0 <= next_element <= 100:
-                confidence[_fmt_num(next_element)] += 20
+                confidence[_fmt_num(next_element)] += 40
             if abs(step) == 29 and 0 <= next_element <= 100:
                 candidate = _fmt_num(next_element)
                 if _confidence_margin(base_confidence, candidate) <= 15:
