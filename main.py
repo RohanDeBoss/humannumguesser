@@ -1,7 +1,7 @@
-# Version 4.10 sliding XGBoost + gated digit-product transform
+# Version 4.11 sliding XGBoost + final-stage human transforms
 # XGB trains on the most recent XGB_WINDOW entries.
-#907: 15.436 -> 15.766
-#my: 8.50 -> 8.40
+#907: 15.766 -> 16.317
+#my: 8.40 -> 8.20
 
 import os
 import glob
@@ -573,6 +573,31 @@ def main():
             candidate = f"{inputted[-1][1]}{(int(inputted[-1][0]) * int(inputted[-1][1])) % 10}"
             if _confidence_rank(confidence, candidate) <= 4:
                 confidence[candidate] += 60
+    except: pass
+
+    try:
+        if input_len >= 2:
+            candidate = _fmt_num(int(inputted[-2]) + 1)
+            if _confidence_rank(confidence, candidate) <= 6:
+                confidence[candidate] += 18
+    except: pass
+
+    try:
+        if input_len >= 1 and inputted[-1] != "100":
+            first_digit = int(inputted[-1][0])
+            second_digit = int(inputted[-1][1])
+            candidate = f"{(first_digit + second_digit) % 10}{(first_digit * second_digit) % 10}"
+            if _confidence_rank(confidence, candidate) <= 2:
+                confidence[candidate] += 60
+    except: pass
+
+    try:
+        if input_len >= 2:
+            next_element = int(inputted[-1]) + (int(inputted[-1]) - int(inputted[-2])) + 2
+            if 0 <= next_element <= 100:
+                candidate = _fmt_num(next_element)
+                if _confidence_rank(confidence, candidate) <= 3:
+                    confidence[candidate] += 100
     except: pass
 
     if len(inputted) == 0: return "37"
