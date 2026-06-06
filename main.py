@@ -1,6 +1,7 @@
-# Version 4.9 capped XGBoost history
-#907: 15.436 -> 15.436
-#my: 8.45 -> 8.50
+# Version 4.10 sliding XGBoost + gated digit-product transform
+# XGB trains on the most recent XGB_WINDOW entries.
+#907: 15.436 -> 15.766
+#my: 8.50 -> 8.40
 
 import os
 import glob
@@ -30,7 +31,11 @@ wrongsfx               = assets + os.path.join("audios", "wrong.mp3")
 
 global temp, tempc, next_element, confidence, nextfirstdiff, nextseconddiff
 inputted, firstdiff, seconddiff, temp, tempc, win, train, firstinp, secondinp, played = [], [], [], [], [], 0, [], [], [], []
-XGB_HISTORY_LIMIT = 700
+
+# How many of the most recent user entries XGBoost trains on.
+# Older entries are excluded from XGB training (they become stale for a
+# personal-sequence model) but remain fully available to every other method.
+XGB_WINDOW = 700
 
 # ── Dataset management ────────────────────────────────────────────────────────
 _create_mode     = False
@@ -261,7 +266,7 @@ def differencepred():
         nextfirstdiff = frequency[inputted[-1]][0]
         if nextfirstdiff == 10: nextseconddiff = 0
         else: nextseconddiff = frequency[inputted[-1]][1]
-        normaldist(nextfirstdiff, nextseconddiff, 1.05)  # Reduced from 1.1
+        normaldist(nextfirstdiff, nextseconddiff, 1.05)
     except: pass
     nextfirstdiff, nextseconddiff = None, None
 
@@ -278,23 +283,30 @@ def differencepred():
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.7)
     nextfirstdiff, nextseconddiff = None, None
 
+    # XGBoost trains on the most recent live window. Other methods still use
+    # the full unsliced firstinp / secondinp / inputted history.
     try:
-        X_train, y_train, X_pred = get_xgb_features(firstinp, 10)
-        if len(y_train) > 0 and len(firstinp) <= XGB_HISTORY_LIMIT:
-            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
+        xgb_first = firstinp[-XGB_WINDOW:]
+        X_train, y_train, X_pred = get_xgb_features(xgb_first, 10)
+        if len(y_train) > 0:
+            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11,
+                                     objective='reg:squarederror', n_jobs=1)
             model.fit(X_train, y_train)
             nextfirstdiff = int(model.predict(X_pred)[0])
     except: pass
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try:
-            X_train, y_train, X_pred = get_xgb_features(secondinp, 10)
-            if len(y_train) > 0 and len(secondinp) <= XGB_HISTORY_LIMIT:
-                model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11, objective='reg:squarederror', n_jobs=1)
+            xgb_second = secondinp[-XGB_WINDOW:]
+            X_train, y_train, X_pred = get_xgb_features(xgb_second, 10)
+            if len(y_train) > 0:
+                model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11,
+                                         objective='reg:squarederror', n_jobs=1)
                 model.fit(X_train, y_train)
                 nextseconddiff = int(model.predict(X_pred)[0])
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.05)
+    # ─────────────────────────────────────────────────────────────────────────
 
     nextfirstdiff = None
     try:
@@ -556,6 +568,13 @@ def main():
                     confidence[candidate] += 3
     except: pass
 
+    try:
+        if input_len >= 1 and inputted[-1] != "100":
+            candidate = f"{inputted[-1][1]}{(int(inputted[-1][0]) * int(inputted[-1][1])) % 10}"
+            if _confidence_rank(confidence, candidate) <= 4:
+                confidence[candidate] += 60
+    except: pass
+
     if len(inputted) == 0: return "37"
     if max(confidence.values()) == 0.0: return inputted[-1]
     return max(confidence, key=confidence.get)
@@ -593,7 +612,7 @@ def numinput(event=None):
                 returned = main()
                 inputted.append(input_text)
                 if 0 <= int(inputted[-1]) <= 9: inputted[-1] = f"0{inputted[-1]}"
-                played.insert(0, returned); 
+                played.insert(0, returned)
                 if len(played) >= 4: played.pop(-1)
                 correct = inputted[-1] == returned
                 _manual_history.append(correct)
@@ -646,7 +665,7 @@ def _prompt_save_dataset():
     name_entry.select_range(0, "end")
 
     def do_save(evt=None):
-        global _current_entries  # ← add this
+        global _current_entries
         raw  = name_var.get().strip()
         if not raw: return
         safe = "".join(c if c.isalnum() or c == "_" else "_" for c in raw)
@@ -658,7 +677,7 @@ def _prompt_save_dataset():
         dialog.destroy()
 
     def do_discard():
-        global _current_entries  # ← add this
+        global _current_entries
         _current_entries = []
         dialog.destroy()
 
@@ -776,9 +795,9 @@ _test_ran = False
 pygame.mixer.init()
 timerup = False
 
-BG      = "#aee8e8"   # pale turquoise
-PANEL   = "#c8f0f0"   # slightly lighter panel bg
-ACCENT  = "#87ceeb"   # skyblue1
+BG      = "#aee8e8"
+PANEL   = "#c8f0f0"
+ACCENT  = "#87ceeb"
 BTN_BG  = "#4a7fa5"
 BTN_FG  = "white"
 DARK    = "#1a2d3d"
@@ -797,15 +816,13 @@ def toggle_fullscreen(event=None):
     root.attributes("-fullscreen", False)
 root.bind("<Escape>", toggle_fullscreen)
 
-# ── Root grid: left panel (col 0) + right sidebar (col 1) ────────────────────
 root.grid_columnconfigure(0, weight=3)
 root.grid_columnconfigure(1, weight=1)
-root.grid_rowconfigure(0, weight=0)   # title + input
-root.grid_rowconfigure(1, weight=0)   # controls
-root.grid_rowconfigure(2, weight=1)   # stats (expandable)
-root.grid_rowconfigure(3, weight=0)   # result readout
+root.grid_rowconfigure(0, weight=0)
+root.grid_rowconfigure(1, weight=0)
+root.grid_rowconfigure(2, weight=1)
+root.grid_rowconfigure(3, weight=0)
 
-# ── Title + input ─────────────────────────────────────────────────────────────
 top_frame = tk.Frame(root, bg=BG)
 top_frame.grid(row=0, column=0, columnspan=1, sticky="ew", padx=30, pady=(18, 6))
 
@@ -819,7 +836,6 @@ entry.pack(fill="x", pady=(10, 0), ipady=4)
 entry.bind("<Return>", numinput)
 entry.focus_set()
 
-# ── Controls panel ────────────────────────────────────────────────────────────
 ctrl_frame = tk.Frame(root, bg=PANEL, bd=0, relief="flat")
 ctrl_frame.grid(row=1, column=0, sticky="ew", padx=30, pady=(8, 4))
 ctrl_frame.grid_columnconfigure(0, weight=0)
@@ -827,7 +843,6 @@ ctrl_frame.grid_columnconfigure(0, weight=0)
 img_button    = tk.PhotoImage(file=checknumberbutton)
 img_907button = tk.PhotoImage(file=standardizedtestbutton)
 
-# ── Row A: Check + Run + dropdown only ───────────────────────────────────────
 rowA = tk.Frame(ctrl_frame, bg=PANEL)
 rowA.pack(fill="x", padx=12, pady=(10, 4))
 
@@ -844,7 +859,6 @@ test_dropdown = ttk.Combobox(rowA, state="readonly", font=("Helvetica", 13), wid
 test_dropdown.pack(side="left", padx=(0, 8))
 test_dropdown.bind("<<ComboboxSelected>>", lambda e: _update_dataset_info())
 
-# ── Row C: Create dataset + entry count + dataset info + show guess ───────────
 rowC = tk.Frame(ctrl_frame, bg=PANEL)
 rowC.pack(fill="x", padx=12, pady=(0, 10))
 
@@ -869,7 +883,6 @@ tk.Checkbutton(rowC, text="Show AI guess", variable=show_guess_var,
                font=("Helvetica", 13), bg=PANEL,
                activebackground=PANEL).pack(side="left")
 
-# ── Stats panel ───────────────────────────────────────────────────────────────
 stats_frame = tk.Frame(root, bg=BG)
 stats_frame.grid(row=2, column=0, sticky="nsew", padx=30, pady=4)
 stats_frame.grid_columnconfigure(0, weight=1)
@@ -895,7 +908,6 @@ last_label.pack(pady=2)
 history_canvas = tk.Canvas(stats_frame, height=16, bg=BG, highlightthickness=0)
 history_canvas.pack(fill="x", pady=(2, 4))
 
-# ── Result readout (bottom of left column) ────────────────────────────────────
 result_frame = tk.Frame(root, bg=BG)
 result_frame.grid(row=3, column=0, sticky="ew", padx=30, pady=(4, 20))
 
@@ -923,7 +935,6 @@ rounds_label = tk.Label(readout_right, text="0 rounds",
                         bg=BG, fg="#555555")
 rounds_label.pack(anchor="w")
 
-# ── Right sidebar: confidence levels ─────────────────────────────────────────
 right_frame = tk.Frame(root, bg=BG)
 right_frame.grid(row=0, column=1, rowspan=4, sticky="nsew", padx=(0, 20), pady=20)
 
