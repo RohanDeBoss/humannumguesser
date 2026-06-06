@@ -1,7 +1,6 @@
-# Version 4.11 sliding XGBoost + final-stage human transforms
-# XGB trains on the most recent XGB_WINDOW entries.
-#907: 15.766 -> 16.317
-#my: 8.40 -> 8.20
+# Version 4.2 Remove prev_plus1
+#907: 16.317 -> 16.207
+#my: 8.20 -> 8.45
 
 import os
 import glob
@@ -573,13 +572,6 @@ def main():
             candidate = f"{inputted[-1][1]}{(int(inputted[-1][0]) * int(inputted[-1][1])) % 10}"
             if _confidence_rank(confidence, candidate) <= 4:
                 confidence[candidate] += 60
-    except: pass
-
-    try:
-        if input_len >= 2:
-            candidate = _fmt_num(int(inputted[-2]) + 1)
-            if _confidence_rank(confidence, candidate) <= 6:
-                confidence[candidate] += 18
     except: pass
 
     try:
