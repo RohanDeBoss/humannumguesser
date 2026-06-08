@@ -1,6 +1,6 @@
-# Version 4.2 Remove prev_plus1
-#907: 16.317 -> 16.207
-#my: 8.20 -> 8.45
+# Version 4.3 gated period-5 decrement
+#907: 16.207 -> 16.317
+#my: 8.45 -> 8.50
 
 import os
 import glob
@@ -590,6 +590,13 @@ def main():
                 candidate = _fmt_num(next_element)
                 if _confidence_rank(confidence, candidate) <= 3:
                     confidence[candidate] += 100
+    except: pass
+
+    try:
+        if input_len >= 5:
+            candidate = _fmt_num(int(inputted[-5]) - 1)
+            if _confidence_rank(confidence, candidate) <= 2:
+                confidence[candidate] += 60
     except: pass
 
     if len(inputted) == 0: return "37"
