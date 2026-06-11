@@ -1,6 +1,6 @@
-# Version 4.4 optimised chains
-#907: 16.207 -> 16.317
-#my: 8.45 -> 8.50
+# Version 4.5 tests
+#907: 16.317 -> 16.317
+#my: 8.50 -> 8.60
 
 import os
 import glob
@@ -336,7 +336,7 @@ def differencepred():
         xgb_first = firstinp[-XGB_WINDOW:]
         X_train, y_train, X_pred = get_xgb_features(xgb_first, 10)
         if len(y_train) > 0:
-            model = xgb.XGBRegressor(n_estimators=35, max_depth=10, learning_rate=0.11,
+            model = xgb.XGBRegressor(n_estimators=35, max_depth=5, learning_rate=0.11,
                                      objective='reg:squarederror', n_jobs=1)
             model.fit(X_train, y_train)
             nextfirstdiff = int(model.predict(X_pred)[0])
@@ -416,7 +416,9 @@ def main():
                     while L < j_limit - 1 and L < input_len:
                         if inputted[i - L] == inputted[-1 - L]: L += 1
                         else: break
-                    if L >= 2:
+                    if L >= 4:
+                        confidence[inputted[i + 1]] += (L ** 3) * 20 * retro
+                    elif L >= 2:
                         confidence[inputted[i + 1]] += (L * (L - 1) / 2) * 13 * retro
                     elif L == 1:
                         confidence[inputted[i + 1]] += 3.5 * retro
@@ -435,11 +437,26 @@ def main():
                 if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 15
     except: pass
 
-    if (len(inputted) >= 3) and (inputted[-1] != inputted[-2]) and (int(inputted[-1]) - int(inputted[-2])) == (int(inputted[-2]) - int(inputted[-3])):
-        difference   = int(inputted[-1]) - int(inputted[-2])
-        next_element = int(inputted[-1]) + difference
-        if 0 <= next_element <= 9: next_element = f"0{next_element}"
-        if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 30
+    try:
+        if len(inputted) >= 3:
+            d1 = int(inputted[-1]) - int(inputted[-2])
+            d2 = int(inputted[-2]) - int(inputted[-3])
+            if d1 == d2:
+                if d1 == 0:
+                    confidence[inputted[-1]] += 150
+                    if len(inputted) >= 4 and inputted[-3] == inputted[-4]:
+                        confidence[inputted[-1]] += 300
+                else:
+                    next_element = int(inputted[-1]) + d1
+                    if 0 <= next_element <= 100:
+                        cand = f"0{next_element}" if next_element <= 9 else str(next_element)
+                        boost = 30
+                        if len(inputted) >= 4 and int(inputted[-3]) - int(inputted[-4]) == d1:
+                            boost = 80
+                        if len(inputted) >= 5 and int(inputted[-4]) - int(inputted[-5]) == d1:
+                            boost = 200
+                        confidence[cand] += boost
+    except: pass
 
     try:
         if (len(inputted) >= 2) and ((int(inputted[-2])/int(inputted[-1])) in {2, 0.5}):
@@ -500,8 +517,13 @@ def main():
             d1 = int(inputted[-1])-int(inputted[-2]); d2 = int(inputted[-2])-int(inputted[-3]); d3 = int(inputted[-3])-int(inputted[-4])
             if (d1-d2) == (d2-d3) and d1 != d2:
                 next_element = int(inputted[-1]) + d1 + (d1-d2)
-                if 0 <= next_element <= 9:  next_element = f"0{next_element}"
-                if 0 <= int(next_element) <= 100: confidence[str(next_element)] += 15
+                if 0 <= next_element <= 100:
+                    cand = f"0{next_element}" if next_element <= 9 else str(next_element)
+                    boost = 15
+                    if len(inputted) >= 5:
+                        d4 = int(inputted[-4])-int(inputted[-5])
+                        if (d2-d3) == (d3-d4): boost = 60
+                    confidence[cand] += boost
     except: pass
 
     try:
