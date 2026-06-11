@@ -1,4 +1,4 @@
-# Version 4.3 gated period-5 decrement
+# Version 4.4 optimised chains
 #907: 16.207 -> 16.317
 #my: 8.45 -> 8.50
 
@@ -64,9 +64,15 @@ def _scan_saved_datasets():
 
 def _reset_session():
     global inputted, firstinp, secondinp, win, played, _manual_history, _test_ran
+    global _user_mc_full_idx
     inputted, firstinp, secondinp, played, _manual_history = [], [], [], [], []
     win = 0
     _test_ran = False
+    _user_mc_first.clear()
+    _user_mc_second.clear()
+    _user_mc_full.clear()
+    _user_mc_full_idx = 0
+    _inputted_int_cache.clear()
     winrate_label.config(text="—")
     rounds_label.config(text="0 rounds")
     winorloselabel.config(text="")
@@ -111,6 +117,45 @@ _base_mc_first  = _build_base_mc(firstdataset,  1)
 _base_mc_second = _build_base_mc(seconddataset, 1)
 _base_mc_full   = _build_base_mc(dataset,       1)
 _base_mc_full2  = _build_base_mc(dataset,       2)
+
+# ── Incremental user Markov chains ────────────────────────────────────────────
+# One pair added per round; merged-state lookup replaces the three O(n)-per-call
+# _mc_from_base rebuilds without copying either chain.
+_user_mc_first   = {}
+_user_mc_second  = {}
+_user_mc_full    = {}
+_user_mc_full_idx = 0   # how many inputted pairs have been synced
+
+def _mc_add(mc, from_val, to_val):
+    k = (from_val,)
+    if k not in mc:
+        mc[k] = {}
+    mc[k][to_val] = mc[k].get(to_val, 0) + 1
+
+def _mc_merged_predict(base_mc, user_mc, query_val):
+    """Max-transition prediction over merged base+user without copying either chain."""
+    state  = (query_val,)
+    base_t = base_mc.get(state, {})
+    user_t = user_mc.get(state, {})
+    if base_t or user_t:
+        combined = dict(base_t)
+        for nxt, cnt in user_t.items():
+            combined[nxt] = combined.get(nxt, 0) + cnt
+        if combined:
+            return max(combined, key=combined.get)
+    overall = defaultdict(int)
+    for t in base_mc.values():
+        for nxt, cnt in t.items():
+            overall[nxt] += cnt
+    for t in user_mc.values():
+        for nxt, cnt in t.items():
+            overall[nxt] += cnt
+    if overall:
+        return max(overall, key=overall.get)
+    return None
+
+# ── Incremental inputted_int ──────────────────────────────────────────────────
+_inputted_int_cache = []   # mirrors inputted as ints; one append per round
 
 _number_order = {str(i).zfill(2): i for i in range(0, 101)}
 
@@ -243,12 +288,15 @@ def _mc_from_base(base_mc, user_data, k):
 
 def differencepred():
     global nextfirstdiff, nextseconddiff, confidence, firstinp, secondinp, inputted
+    global _user_mc_full_idx
     confidence = {str(i).zfill(2): 0 for i in range(0, 101)}
     if len(inputted) == 0: return confidence
     try:
         if inputted[-1] == "100": firstinp.append(10)
         else: firstinp.append(int(inputted[-1][0]))
         secondinp.append(int(inputted[-1][1]))
+        if len(firstinp)  >= 2: _mc_add(_user_mc_first,  firstinp[-2],  firstinp[-1])
+        if len(secondinp) >= 2: _mc_add(_user_mc_second, secondinp[-2], secondinp[-1])
     except: pass
 
     nextfirstdiff, nextseconddiff = None, None
@@ -270,14 +318,14 @@ def differencepred():
     nextfirstdiff, nextseconddiff = None, None
 
     try:
-        mc = _mc_from_base(_base_mc_first, firstinp, 1)
-        nextfirstdiff = int(predict_next_elementmark(mc, tuple(firstinp[-1:])))
+        r = _mc_merged_predict(_base_mc_first, _user_mc_first, firstinp[-1])
+        if r is not None: nextfirstdiff = int(r)
     except: pass
     if nextfirstdiff == 10: nextseconddiff = 0
     else:
         try:
-            mc = _mc_from_base(_base_mc_second, secondinp, 1)
-            nextseconddiff = int(predict_next_elementmark(mc, tuple(secondinp[-1:])))
+            r = _mc_merged_predict(_base_mc_second, _user_mc_second, secondinp[-1])
+            if r is not None: nextseconddiff = int(r)
         except: pass
     if nextseconddiff and nextfirstdiff: normaldist(nextfirstdiff, nextseconddiff, 1.7)
     nextfirstdiff, nextseconddiff = None, None
@@ -309,15 +357,21 @@ def differencepred():
 
     nextfirstdiff = None
     try:
-        inputted_int = [int(x) for x in inputted]
-        nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset_int, inputted_int)))
+        while len(_inputted_int_cache) < len(inputted):
+            _inputted_int_cache.append(int(inputted[len(_inputted_int_cache)]))
+        nextfirstdiff = round(float(predict_next_fast(_base_rf_full, dataset_int, _inputted_int_cache)))
     except: pass
     if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 7.8)
     nextfirstdiff = None
 
+    # Sync _user_mc_full with new inputted entries
+    while _user_mc_full_idx + 1 < len(inputted):
+        _mc_add(_user_mc_full, inputted[_user_mc_full_idx], inputted[_user_mc_full_idx + 1])
+        _user_mc_full_idx += 1
+
     try:
-        mc = _mc_from_base(_base_mc_full, inputted, 1)
-        nextfirstdiff = int(predict_next_elementmark(mc, tuple(inputted[-1:])))
+        r = _mc_merged_predict(_base_mc_full, _user_mc_full, inputted[-1])
+        if r is not None: nextfirstdiff = int(r)
     except: pass
     if nextfirstdiff is not None: othernormaldist(int(nextfirstdiff), 4.6)
     nextfirstdiff = None

@@ -68,7 +68,7 @@ Known good accepted changes:
 
 Accepted v4.10-v4.12 scoring improvements from v4.9 baseline (Net: 140 → 148 on 907, 170 → 170 on my_dataset, 310 → 318 combined):
 
-**v4.10** — Late-stage rule bundle:
+**v4.1** — Late-stage rule bundle:
 - Added gated digit-product transform: `b(a*b mod 10)` only when candidate rank <= 4, +60 confidence.
 - Added three new gated human-ish final-stage rules measured against pre-v4.10 confidence snapshot:
   - Previous entry + 1 (rank <= 6, weight 18)
@@ -77,22 +77,22 @@ Accepted v4.10-v4.12 scoring improvements from v4.9 baseline (Net: 140 → 148 o
 - Exact verification: `907 140 -> 148`, `my_dataset 168 -> 164`, combined `310 -> 312`
 - Trade: +8 on 907 for -4 on my_dataset.
 
-**v4.11** — Removed prev_plus1 rule:
+**v4.2** — Removed prev_plus1 rule:
 - The `previous + 1` boost was hurting my_dataset despite improving 907.
 - Exact verification: `907 148 -> 147`, `my_dataset 164 -> 169`, combined `312 -> 316`
 - Better overall balance; traded 1 hit on 907 for 5 hits on my_dataset (+4 net combined).
 
-**v4.12** — Period-5 decrement rule:
+**v4.3** — Period-5 decrement rule:
 - Added gated decrement of 5th digit back: `if input_len >= 5: candidate = inputted[-5] - 1` with rank <= 2 gate, +60 weight.
 - Exact verification: `907 147 -> 148`, `my_dataset 169 -> 170`, combined `316 -> 318`
 - Recovered my_dataset point while restoring 907 score. Net improvement: +2 combined.
 
-Optimization work on v4.12 baseline (locked: 148/907, 170/2000):
-- **Markov-chain copy reduction**: Replaced full chain clones per call with merged-state lookup. Preserved exact score, timing: ~94s → ~81.6s.
+Optimization work on v4.4 baseline (locked: 148/907, 170/2000):
+- **Incremental Markov + cache (opt-1)**: Replaced full chain rebuilds with incremental dicts and state-specific merges. Score preserved: `148/907`, `170/2000`. Exact timing verified: `~94s → 56s` (~40% reduction).
+
 - **XGB feature construction with NumPy sliding-window view**: Attempted; reverted (slower on this machine).
 - **RandomForest parallelism (n_jobs=-1)**: Tested; reverted (thread overhead exceeded benefit for tiny 10-tree forests).
 - **XGBoost parallelism**: Tested at n_jobs 1/2/4/8/16; n_jobs=1 remained fastest (~98.6s). Parallelization adds overhead for many small fits.
-- **In progress**: Testing smaller model knobs (RF tree count, XGB tree count) as in-memory candidates to reduce computation without losing score.
 
 Rejected / not kept from v4.10-v4.12 pass:
 - Broader tuning of v4.12 rules: many found isolated improvements on my_dataset only, but these did not survive exact verification on both test sets simultaneously.
