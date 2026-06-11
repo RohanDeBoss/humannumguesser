@@ -1,9 +1,10 @@
 # Experiment Notes And Useful Test Results
 
 Current accepted baseline:
-- `v4.9`
-- `907`: `140/907 = 15.435502%`
+- `v4.3`
+- `907`: `148/907 = 16.31%`
 - `my_dataset`: `170/2000 = 8.50%`
+- Combined: `318/2907`
 
 Recommended screening workflow:
 - Test `907` first with the fast harness.
@@ -45,19 +46,58 @@ Known good accepted changes:
   - Exact verification: `907 -> 140/907`, `my_dataset -> 170/2000`.
   - Combined objective: `309 -> 310`.
   - Exact saved-file timing in this pass: `907 83.876s`, `my_dataset 137.475s`, combined `221.35s`.
+- `v4.10`: major late-stage rule bundle with gated digit-product and human-ish transforms (previously labeled v4.1 in new work).
+  - Added gated digit-product transform: `b(a*b mod 10)` with rank <= 4, weight +60.
+  - Added three gated human-ish final-stage rules:
+    - Previous entry + 1 (rank <= 6, weight 18)
+    - Sum mod 10 + Product mod 10 (rank <= 2, weight 60)
+    - Continue last step nudged by +2 (rank <= 3, weight 100)
+  - Exact verification: `907 -> 148/907`, `my_dataset -> 164/2000`.
+  - Combined objective: `310 -> 312`.
+- `v4.2`: removed prev_plus1 rule for better my_dataset balance.
+  - The `previous + 1` boost was trading too many my_dataset points for 907 gains.
+  - Exact verification: `907 -> 147/907`, `my_dataset -> 169/2000`.
+  - Combined objective: `312 -> 316`.
+- `v4.3`: added period-5 decrement rule.
+  - Added gated decrement of 5th digit back: `if input_len >= 5: candidate = inputted[-5] - 1` with rank <= 2 gate and +60 weight.
+  - Exact verification: `907 -> 148/907`, `my_dataset -> 170/2000`.
+  - Combined objective: `316 -> 318`.
+  - Recovered my_dataset performance while maintaining 907 gains.
 
 ## Latest pass
 
-Accepted v4.9 speed/score change:
-- Capped the first-digit and second-digit live XGBoost retraining branches at `XGB_HISTORY_LIMIT = 700`.
-- Rationale: XGBoost was one of the dominant runtime costs in profiling, but the late-history fits were not paying their way.
-- Exact saved-file verification:
-  - `907`: `140 -> 140`
-  - `my_dataset`: `169 -> 170`
-  - Combined: `309 -> 310`
-  - Runtime: `907 83.876s`, `my_dataset 137.475s`, total `221.35s`
+Accepted v4.10-v4.12 scoring improvements from v4.9 baseline (Net: 140 → 148 on 907, 170 → 170 on my_dataset, 310 → 318 combined):
 
-Rejected / not kept from this speed pass:
+**v4.10** — Late-stage rule bundle:
+- Added gated digit-product transform: `b(a*b mod 10)` only when candidate rank <= 4, +60 confidence.
+- Added three new gated human-ish final-stage rules measured against pre-v4.10 confidence snapshot:
+  - Previous entry + 1 (rank <= 6, weight 18)
+  - Sum mod 10 + Product mod 10 (rank <= 2, weight 60)
+  - Continue last step nudged by +2 (rank <= 3, weight 100)
+- Exact verification: `907 140 -> 148`, `my_dataset 168 -> 164`, combined `310 -> 312`
+- Trade: +8 on 907 for -4 on my_dataset.
+
+**v4.11** — Removed prev_plus1 rule:
+- The `previous + 1` boost was hurting my_dataset despite improving 907.
+- Exact verification: `907 148 -> 147`, `my_dataset 164 -> 169`, combined `312 -> 316`
+- Better overall balance; traded 1 hit on 907 for 5 hits on my_dataset (+4 net combined).
+
+**v4.12** — Period-5 decrement rule:
+- Added gated decrement of 5th digit back: `if input_len >= 5: candidate = inputted[-5] - 1` with rank <= 2 gate, +60 weight.
+- Exact verification: `907 147 -> 148`, `my_dataset 169 -> 170`, combined `316 -> 318`
+- Recovered my_dataset point while restoring 907 score. Net improvement: +2 combined.
+
+Optimization work on v4.12 baseline (locked: 148/907, 170/2000):
+- **Markov-chain copy reduction**: Replaced full chain clones per call with merged-state lookup. Preserved exact score, timing: ~94s → ~81.6s.
+- **XGB feature construction with NumPy sliding-window view**: Attempted; reverted (slower on this machine).
+- **RandomForest parallelism (n_jobs=-1)**: Tested; reverted (thread overhead exceeded benefit for tiny 10-tree forests).
+- **XGBoost parallelism**: Tested at n_jobs 1/2/4/8/16; n_jobs=1 remained fastest (~98.6s). Parallelization adds overhead for many small fits.
+- **In progress**: Testing smaller model knobs (RF tree count, XGB tree count) as in-memory candidates to reduce computation without losing score.
+
+Rejected / not kept from v4.10-v4.12 pass:
+- Broader tuning of v4.12 rules: many found isolated improvements on my_dataset only, but these did not survive exact verification on both test sets simultaneously.
+
+Rejected / not kept from v4.9 speed pass:
 - Replacing full Markov-chain copies with a per-call merged-state scan preserved `907`, but slowed the benchmark.
 - An incremental Markov cache also preserved `907`, but was still slower in exact timing.
 - Base-only RandomForest prediction was faster, but dropped `907` to `136`.

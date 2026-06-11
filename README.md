@@ -2,7 +2,8 @@
 
 ## winrate
 
-the current winrate on the 907 standardized test is `15.436%`
+the current winrate on the 907 standardized test is `16.31%` (148/907)  
+combined with my_dataset: 318/2907 total correct
 
 ## note
 
